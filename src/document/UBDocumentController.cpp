@@ -1489,6 +1489,14 @@ UBDocumentTreeView::UBDocumentTreeView(QWidget *parent) : QTreeView(parent)
     setObjectName("UBDocumentTreeView");
     setRootIsDecorated(true);
     setSelectionBehavior(SelectRows);
+
+    // The document library is a light surface. Pin its background and text
+    // colors so a dark application palette cannot leave the name column dark
+    // while making the labels dark as well.
+    setStyleSheet(
+        "QTreeView { background-color: #e6e6e6; color: #222222; }"
+        "QTreeView::item { color: #222222; }"
+        "QTreeView::item:selected { color: #FFFFFF; }");
 }
 
 void UBDocumentTreeView::setSelectedAndExpanded(const QModelIndex &pIndex, bool pExpand, bool pEdit)
@@ -1875,6 +1883,11 @@ QWidget *UBDocumentTreeItemDelegate::createEditor(QWidget *parent, const QStyleO
             if (sourceNode)
             {
                 QLineEdit *nameEditor = new QLineEdit(parent);
+                QPalette editorPalette = nameEditor->palette();
+                editorPalette.setColor(QPalette::Text, QColor("#222222"));
+                editorPalette.setColor(QPalette::Base, QColor("#FFFFFF"));
+                nameEditor->setPalette(editorPalette);
+
                 QList<UBDocumentTreeNode*> nodeChildren = docModel->nodeChildrenFromIndex(sourceIndex.parent());
                 nodeChildren.removeOne(sourceNode);
 
@@ -1922,7 +1935,36 @@ void UBDocumentTreeItemDelegate::setModelData(QWidget *editor, QAbstractItemMode
 
 void UBDocumentTreeItemDelegate::paint(QPainter * painter, const QStyleOptionViewItem & option, const QModelIndex &index) const
 {
-    QStyledItemDelegate::paint(painter, option, index);
+    QStyleOptionViewItem styledOption(option);
+
+    // The document library is always displayed on a light background. Force
+    // crisp dark labels independently of the application palette, which is
+    // built for the (dark) board and would otherwise render white text here.
+    styledOption.palette.setColor(QPalette::Text, QColor("#222222"));
+    styledOption.palette.setColor(QPalette::HighlightedText, QColor("#FFFFFF"));
+    styledOption.palette.setColor(QPalette::Base, QColor("#e6e6e6"));
+
+    const QBrush modelBackground =
+            index.data(Qt::BackgroundRole).value<QBrush>();
+    const bool hasModelBackground =
+            modelBackground.style() != Qt::NoBrush
+            && modelBackground.color().alpha() > 0;
+
+    if (!(styledOption.state & QStyle::State_Selected)) {
+        if (hasModelBackground) {
+            // Keep custom row backgrounds (constants, drop target). If the
+            // background is dark, switch the label to white for contrast.
+            if (modelBackground.color().lightness() < 128)
+                styledOption.palette.setColor(QPalette::Text, QColor("#FFFFFF"));
+        }
+        else {
+            // Explicit light backing, so the names stay readable even when
+            // the surrounding widget/palette is dark.
+            styledOption.backgroundBrush = QBrush(QColor("#e6e6e6"));
+        }
+    }
+
+    QStyledItemDelegate::paint(painter, styledOption, index);
 }
 
 UBDocumentController::UBDocumentController(UBMainWindow* mainWindow)

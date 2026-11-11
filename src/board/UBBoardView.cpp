@@ -33,6 +33,7 @@
 #include <QtGui>
 #include <QtXml>
 #include <QListView>
+#include <QApplication>
 
 #include "UBDrawingController.h"
 
@@ -64,6 +65,7 @@
 #include "desktop/UBDesktopAnnotationController.h"
 #endif
 
+#include "domain/UBGraphicsScene.h"
 #include "domain/UBGraphicsTextItem.h"
 #include "domain/UBGraphicsPixmapItem.h"
 #include "domain/UBGraphicsWidgetItem.h"
@@ -89,6 +91,37 @@
 
 #include "core/memcheck.h"
 
+namespace {
+
+QCursor strokeEraserCursor()
+{
+    constexpr int cursorSize = 16;
+    QPixmap pixmap(cursorSize, cursorSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    // White halo makes the dot visible on dark boards; black ring on light ones.
+    painter.setPen(QPen(Qt::white, 3.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0));
+
+    painter.setPen(QPen(Qt::black, 1.5));
+    painter.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0));
+
+    // Small precision crosshair ticks.
+    painter.setPen(QPen(Qt::black, 1.0));
+    painter.drawLine(QPointF(8.0, 0.0), QPointF(8.0, 3.0));
+    painter.drawLine(QPointF(8.0, 13.0), QPointF(8.0, 16.0));
+    painter.drawLine(QPointF(0.0, 8.0), QPointF(3.0, 8.0));
+    painter.drawLine(QPointF(13.0, 8.0), QPointF(16.0, 8.0));
+
+    return QCursor(pixmap, cursorSize / 2, cursorSize / 2);
+}
+
+} // namespace
+
 UBBoardView::UBBoardView (UBBoardController* pController, QWidget* pParent, bool isControl, bool isDesktop)
     : QGraphicsView (pParent)
     , mController (pController)
@@ -96,6 +129,7 @@ UBBoardView::UBBoardView (UBBoardController* pController, QWidget* pParent, bool
     , mIsCreatingSceneGrabZone (false)
     , mOkOnWidget(false)
     , _movingItem(nullptr)
+    , _movingItemIsQObject(false)
     , suspendedMousePressEvent(NULL)
     , mLongPressInterval(350)
     , mIsDragInProgress(false)
@@ -121,6 +155,7 @@ UBBoardView::UBBoardView (UBBoardController* pController, int pStartLayer, int p
     : QGraphicsView (pParent)
     , mController (pController)
     , _movingItem(nullptr)
+    , _movingItemIsQObject(false)
     , suspendedMousePressEvent(NULL)
     , mLongPressInterval(350)
     , mIsDragInProgress(false)
@@ -149,6 +184,8 @@ UBBoardView::~UBBoardView ()
 
 void UBBoardView::init ()
 {
+    mLassoForwardingToItems = false;
+
     connect (UBSettings::settings ()->boardPenPressureSensitive, SIGNAL (changed (QVariant)),
              this, SLOT (settingChanged (QVariant)));
 
@@ -940,6 +977,20 @@ void UBBoardView::rubberItems()
         if (item->parentItem() && UBGraphicsGroupContainerItem::Type == item->parentItem()->type())
             mRubberedItems.removeOne(item);
     }
+
+    const auto ubScene = scene();
+    if (ubScene && ubScene->isStrokeOnlySelection())
+    {
+        for (int i = mRubberedItems.size() - 1; i >= 0; --i)
+        {
+            QGraphicsItem *item = mRubberedItems.at(i);
+            if (item->type() == UBGraphicsItemType::PolygonItemType && item->parentItem())
+                item = item->parentItem();
+
+            if (!UBGraphicsScene::isStrokeOnlySelectableItem(item))
+                mRubberedItems.removeAt(i);
+        }
+    }
 }
 
 void UBBoardView::moveRubberedItems(QPointF movingVector)
@@ -1196,8 +1247,26 @@ void UBBoardView::mousePressEvent (QMouseEvent *event)
             event->accept ();
             break;
 
+        case UBStylusTool::Lasso : {
+            const QPointF scenePos = mapToScene(
+                        UBGeometryUtils::pointConstrainedInRect(event->pos(), rect()));
+            mLassoForwardingToItems = scene() && scene()->lassoShouldForwardPress(scenePos);
+
+            if (mLassoForwardingToItems) {
+                // Use Qt's native event forwarding so the selection frame
+                // buttons keep their press/release click state machine and
+                // the resize/rotate grips receive normal drag events.
+                QGraphicsView::mousePressEvent(event);
+            } else if (scene() && !mTabletStylusIsPressed) {
+                scene()->inputDevicePress(scenePos, 1., event->modifiers());
+            }
+            event->accept();
+        } break;
+
         default:
-            if (UBDrawingController::drawingController()->activeRuler() == nullptr) {
+            if (currentTool != UBStylusTool::StrokeEraser
+                    && currentTool != UBStylusTool::Lasso
+                    && UBDrawingController::drawingController()->activeRuler() == nullptr) {
                 viewport()->setCursor (QCursor (Qt::BlankCursor));
             }
             if (scene () && !mTabletStylusIsPressed) {
@@ -1324,10 +1393,27 @@ void UBBoardView::mouseMoveEvent (QMouseEvent *event)
 
             int counter = 0;
             if (currentTool == UBStylusTool::Selector) {
+                const auto ubScene = scene();
+                const bool strokeOnlySelection = ubScene && ubScene->isStrokeOnlySelection();
+
+                // Keep the selection consistent when the stroke-only filter is
+                // enabled: previously selected non-stroke items are dropped.
+                if (strokeOnlySelection && scene()) {
+                    foreach (QGraphicsItem *selected, scene()->selectedItems()) {
+                        if (selected->type() != UBGraphicsItemType::SelectionFrameType
+                                && !UBGraphicsScene::isStrokeOnlySelectableItem(selected)) {
+                            selected->setSelected(false);
+                        }
+                    }
+                }
+
                 foreach (QGraphicsItem *item, items(bandRect)) {
 
                     if(item->type() == UBGraphicsItemType::PolygonItemType && item->parentItem())
                         item = item->parentItem();
+
+                    if (strokeOnlySelection && !UBGraphicsScene::isStrokeOnlySelectableItem(item))
+                        continue;
 
                     if (item->type() == UBGraphicsW3CWidgetItem::Type
                             || item->type() == UBGraphicsPixmapItem::Type
@@ -1368,6 +1454,22 @@ void UBBoardView::mouseMoveEvent (QMouseEvent *event)
 
     } break;
 
+    case UBStylusTool::Lasso : {
+        const QPointF scenePos = mapToScene(
+                    UBGeometryUtils::pointConstrainedInRect(event->pos(), rect()));
+
+        if (!mMouseButtonIsPressed && !mTabletStylusIsPressed && scene()) {
+            updateHoverCursor(scenePos, UBStylusTool::Lasso);
+        }
+
+        if (mLassoForwardingToItems) {
+            QGraphicsView::mouseMoveEvent(event);
+        } else if (!mTabletStylusIsPressed && scene()) {
+            scene()->inputDeviceMove(scenePos, mMouseButtonIsPressed, event->modifiers());
+        }
+        event->accept();
+    } break;
+
     default:
         if (!mTabletStylusIsPressed && scene()) {
             scene()->inputDeviceMove(mapToScene(UBGeometryUtils::pointConstrainedInRect(event->pos(), rect())) , mMouseButtonIsPressed, event->modifiers());
@@ -1382,7 +1484,11 @@ void UBBoardView::mouseMoveEvent (QMouseEvent *event)
 
 void UBBoardView::movingItemDestroyed(QObject*)
 {
-    setMovingItem(nullptr);
+    // The item is being destroyed; clear the raw pointer directly since
+    // setMovingItem() must not dynamic_cast a dying object.
+    _movingItemObject = nullptr;
+    _movingItemIsQObject = false;
+    _movingItem = nullptr;
 }
 
 void UBBoardView::mouseReleaseEvent (QMouseEvent *event)
@@ -1628,6 +1734,15 @@ void UBBoardView::mouseReleaseEvent (QMouseEvent *event)
         }
 
         mIsCreatingSceneGrabZone = false;
+    }
+    else if (currentTool == UBStylusTool::Lasso)
+    {
+        if (mLassoForwardingToItems)
+            QGraphicsView::mouseReleaseEvent(event);
+        else
+            event->accept();
+
+        mLassoForwardingToItems = false;
     }
     else
     {
@@ -1993,8 +2108,39 @@ void UBBoardView::focusOutEvent (QFocusEvent * event)
     Q_UNUSED (event);
 }
 
+void UBBoardView::updateHoverCursor(const QPointF& scenePos, int tool)
+{
+    if (!scene())
+        return;
+
+    if (tool == UBStylusTool::Lasso) {
+        viewport()->setCursor(QCursor(scene()->lassoHoverCursor(scenePos)));
+        return;
+    }
+
+    if (tool == UBStylusTool::Selector || tool == UBStylusTool::Play) {
+        // Resolve the cursor exactly like QGraphicsView does on mouse hover:
+        // use the first item (or ancestor) that defines a cursor, e.g. the
+        // resize grips of the selection/delegate frames.
+        QGraphicsItem *item = scene()->itemAt(scenePos, viewportTransform());
+        while (item) {
+            if (item->hasCursor()) {
+                viewport()->setCursor(item->cursor());
+                return;
+            }
+            item = item->parentItem();
+        }
+
+        // No item-specific cursor: restore the tool's default cursor.
+        setToolCursor(tool);
+    }
+}
+
 void UBBoardView::setToolCursor (int tool)
 {
+    if (tool != UBStylusTool::Lasso)
+        mLassoForwardingToItems = false;
+
     QWidget *controlViewport = viewport ();
     switch (tool)
     {
@@ -2004,10 +2150,17 @@ void UBBoardView::setToolCursor (int tool)
     case UBStylusTool::Eraser:
         controlViewport->setCursor (UBResources::resources ()->eraserCursor);
         break;
+    case UBStylusTool::StrokeEraser:
+        controlViewport->setCursor (strokeEraserCursor());
+        break;
+    case UBStylusTool::Lasso:
+        controlViewport->setCursor (QCursor (Qt::CrossCursor));
+        break;
     case UBStylusTool::Marker:
         controlViewport->setCursor (UBResources::resources ()->markerCursor);
         break;
     case UBStylusTool::Pointer:
+    case UBStylusTool::Laser:
         controlViewport->setCursor (UBResources::resources ()->pointerCursor);
         break;
     case UBStylusTool::Hand:

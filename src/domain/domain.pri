@@ -25,7 +25,9 @@ HEADERS += src/domain/UBGraphicsScene.h \
     src/domain/UBGraphicsMediaItemDelegate.h \
     src/domain/UBSelectionFrame.h \
     src/domain/UBUndoCommand.h \
-    src/domain/UBGraphicsItemZLevelUndoCommand.h
+    src/domain/UBGraphicsItemZLevelUndoCommand.h \
+    src/domain/UBGraphicsItemColorUndoCommand.h \
+    src/domain/UBGraphicsLaserStroke.h
 
 SOURCES += src/domain/UBGraphicsScene.cpp \
     src/domain/UBWebEngineView.cpp \
@@ -54,4 +56,6 @@ SOURCES += src/domain/UBGraphicsScene.cpp \
     src/domain/UBGraphicsWidgetItemDelegate.cpp \
     src/domain/UBSelectionFrame.cpp \
     src/domain/UBUndoCommand.cpp \
-    src/domain/UBGraphicsItemZLevelUndoCommand.cpp
+    src/domain/UBGraphicsItemZLevelUndoCommand.cpp \
+    src/domain/UBGraphicsItemColorUndoCommand.cpp \
+    src/domain/UBGraphicsLaserStroke.cpp

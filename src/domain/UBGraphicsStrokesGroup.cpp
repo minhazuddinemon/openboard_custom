@@ -30,6 +30,8 @@
 #include "UBGraphicsStrokesGroup.h"
 #include "UBGraphicsStroke.h"
 
+#include <algorithm>
+
 #include "domain/UBGraphicsPolygonItem.h"
 
 #include "core/memcheck.h"
@@ -39,6 +41,8 @@ UBGraphicsStrokesGroup::UBGraphicsStrokesGroup(QGraphicsItem *parent)
     , UBGraphicsItem()
     , debugTextEnabled(false) // set to true to get a graphical display of strokes' Z-levels
     , mDebugText(nullptr)
+    , mHighlighterPathDirty(true)
+    , mIsHighlighter(false)
 {
     setDelegate(new UBGraphicsItemDelegate(this, 0, GF_COMMON
                                            | GF_RESPECT_RATIO
@@ -214,13 +218,61 @@ void UBGraphicsStrokesGroup::copyItemParameters(UBItem *copy) const
     }
 }
 
+void UBGraphicsStrokesGroup::rebuildHighlighterPath()
+{
+    mHighlighterPath = QPainterPath();
+    mHighlighterPath.setFillRule(Qt::WindingFill);
+
+    foreach (QGraphicsItem *item, childItems()) {
+        if (item->type() != UBGraphicsPolygonItem::Type)
+            continue;
+
+        UBGraphicsPolygonItem *polygon = static_cast<UBGraphicsPolygonItem *>(item);
+        QPolygonF poly = polygon->mapToParent(polygon->polygon());
+        if (poly.size() < 3)
+            continue;
+
+        // Keep one winding orientation so overlapping segments add up under
+        // WindingFill instead of cancelling each other out.
+        qreal area = 0.0;
+        for (int i = 0; i < poly.size(); ++i) {
+            const QPointF &a = poly.at(i);
+            const QPointF &b = poly.at((i + 1) % poly.size());
+            area += a.x() * b.y() - b.x() * a.y();
+        }
+        if (area < 0.0)
+            std::reverse(poly.begin(), poly.end());
+
+        mHighlighterPath.addPolygon(poly);
+    }
+
+    mHighlighterPathDirty = false;
+}
+
 void UBGraphicsStrokesGroup::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
     // Never draw the rubber band, we draw our custom selection with the DelegateFrame
     QStyleOptionGraphicsItem styleOption = QStyleOptionGraphicsItem(*option);
     QStyle::State svState = option->state;
     styleOption.state &= ~QStyle::State_Selected;
-    QGraphicsItemGroup::paint(painter, &styleOption, widget);
+
+    if (mIsHighlighter) {
+        if (mHighlighterPathDirty)
+            rebuildHighlighterPath();
+
+        if (!mHighlighterPath.isEmpty()) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            painter->setCompositionMode(QPainter::CompositionMode_SourceOver);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QBrush(color()));
+            painter->drawPath(mHighlighterPath);
+            painter->restore();
+        }
+    } else {
+        QGraphicsItemGroup::paint(painter, &styleOption, widget);
+    }
+
     //Restoring state
     styleOption.state |= svState;
 
@@ -229,6 +281,22 @@ void UBGraphicsStrokesGroup::paint(QPainter *painter, const QStyleOptionGraphics
 
 QVariant UBGraphicsStrokesGroup::itemChange(GraphicsItemChange change, const QVariant &value)
 {
+    if (change == ItemChildAddedChange || change == ItemChildRemovedChange)
+        mHighlighterPathDirty = true;
+
+    if (change == ItemChildAddedChange) {
+        QGraphicsItem *child = value.value<QGraphicsItem *>();
+        if (child && child->type() == UBGraphicsPolygonItem::Type) {
+            UBGraphicsPolygonItem *polygon = static_cast<UBGraphicsPolygonItem *>(child);
+            if (polygon->color().alphaF() < 1.0) {
+                // Semi-transparent ink marks this as a highlighter stroke.
+                // Its segments are painted together by paint() instead.
+                mIsHighlighter = true;
+                child->setFlag(QGraphicsItem::ItemHasNoContents, true);
+            }
+        }
+    }
+
     if (debugTextEnabled && change == ItemZValueChange) {
         double newZ = qvariant_cast<double>(value);
 

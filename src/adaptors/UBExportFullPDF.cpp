@@ -159,8 +159,40 @@ void UBExportFullPDF::saveOverlayPdf(std::shared_ptr<UBDocumentProxy> pDocumentP
                 scene->setBackground(exportDark, UBPageBackground::plain);
             }
 
-            //render to PDF
-            scene->render(pdfPainter, QRectF(), scene->normalizedSceneRect());
+            // QGraphicsScene::render() keeps the aspect ratio and leaves the
+            // letterbox/pillarbox padding untouched by drawBackground().
+            // Compute the aspect-fitted target explicitly, fill the whole
+            // physical page first, then render only inside that target so the
+            // scene background pass cannot repaint the margins.
+            //
+            // For pages backed by a PDF, the overlay must stay transparent so
+            // the original PDF remains visible underneath after merging.
+            pdfPainter->save();
+            pdfPainter->resetTransform();
+            pdfPainter->setClipping(false);
+
+            QRectF pageRect(pdfPainter->viewport());
+            if (pageRect.isEmpty())
+                pageRect = QRectF(0, 0, pdfPainter->device()->width(),
+                                  pdfPainter->device()->height());
+
+            const QRectF sourceRect(scene->normalizedSceneRect());
+
+            QSizeF contentSize = sourceRect.size();
+            contentSize.scale(pageRect.size(), Qt::KeepAspectRatio);
+
+            QRectF contentRect(QPointF(0, 0), contentSize);
+            contentRect.moveCenter(pageRect.center());
+
+            if (!sceneHasPDFBackground)
+            {
+                pdfPainter->fillRect(pageRect, scene->isDarkBackground()
+                                     ? QColor(Qt::black) : QColor(Qt::white));
+            }
+
+            scene->render(pdfPainter, contentRect, sourceRect, Qt::IgnoreAspectRatio);
+
+            pdfPainter->restore();
 
             //restore screen rendering quality
             scene->setRenderingContext(UBGraphicsScene::Screen);

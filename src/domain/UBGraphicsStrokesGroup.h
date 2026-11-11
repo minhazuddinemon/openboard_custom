@@ -32,6 +32,7 @@
 
 #include <QGraphicsItemGroup>
 #include <QGraphicsSceneMouseEvent>
+#include <QPainterPath>
 
 #include "core/UB.h"
 #include "UBItem.h"
@@ -67,6 +68,15 @@ protected:
     virtual void mouseReleaseEvent(QGraphicsSceneMouseEvent *event);
     virtual void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget);
     virtual QVariant itemChange(GraphicsItemChange change, const QVariant &value);
+
+    // Highlighter strokes (semi-transparent ink) are painted as one combined
+    // path so overlapping segment polygons do not double-composite into dark
+    // seam lines. The path is cached and rebuilt when children change.
+    void rebuildHighlighterPath();
+
+    QPainterPath mHighlighterPath;
+    bool mHighlighterPathDirty;
+    bool mIsHighlighter;
 
     // Graphical display of stroke Z-level
     bool debugTextEnabled;

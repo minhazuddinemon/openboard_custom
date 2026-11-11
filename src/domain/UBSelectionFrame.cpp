@@ -28,10 +28,22 @@
 #include "UBSelectionFrame.h"
 
 #include <QtGui>
+#include <QtSvg>
+#include <QSet>
+#include <QMenu>
+#include <QWidgetAction>
+#include <QHBoxLayout>
+#include <QToolButton>
+#include <QColorDialog>
+#include <QCursor>
+#include <QStyle>
 
 #include "domain/UBItem.h"
 #include "domain/UBGraphicsItemZLevelUndoCommand.h"
+#include "domain/UBGraphicsItemColorUndoCommand.h"
 #include "domain/UBGraphicsGroupContainerItem.h"
+#include "domain/UBGraphicsPolygonItem.h"
+#include "domain/UBGraphicsStrokesGroup.h"
 #include "domain/UBGraphicsScene.h"
 #include "board/UBBoardController.h"
 #include "core/UBSettings.h"
@@ -42,17 +54,57 @@
 #include "board/UBBoardView.h"
 #include "board/UBDrawingController.h"
 
+namespace {
+
+// Collects the stroke/vector items contained in item. Group containers are
+// traversed so that recoloring a grouped selection also affects the strokes
+// stored inside the group.
+void collectStrokeItems(QGraphicsItem *item, QList<QGraphicsItem *> &result)
+{
+    if (!item)
+        return;
+
+    const int itemType = item->type();
+
+    if (itemType == UBGraphicsStrokesGroup::Type
+            || itemType == UBGraphicsPolygonItem::Type)
+    {
+        result << item;
+        return;
+    }
+
+    if (itemType == UBGraphicsGroupContainerItem::Type)
+    {
+        foreach (QGraphicsItem *child, item->childItems())
+            collectStrokeItems(child, result);
+    }
+}
+
+} // namespace
+
 UBSelectionFrame::UBSelectionFrame()
     : mThickness(UBSettings::settings()->objectFrameWidth)
     , mAntiscaleRatio(1.0)
     , mCursorRotationAngle(0)
     , mItemRotationAngle(0)
+    , mCurrentScaleTool(NoScale)
     , mDeleteButton(0)
     , mDuplicateButton(0)
     , mZOrderUpButton(0)
     , mZOrderDownButton(0)
     , mGroupButton(0)
+    , mChangeColorButton(0)
     , mRotateButton(0)
+    , mBottomRightResizeGripSvgItem(0)
+    , mBottomResizeGripSvgItem(0)
+    , mLeftResizeGripSvgItem(0)
+    , mRightResizeGripSvgItem(0)
+    , mTopResizeGripSvgItem(0)
+    , mBottomRightResizeGrip(0)
+    , mBottomResizeGrip(0)
+    , mLeftResizeGrip(0)
+    , mRightResizeGrip(0)
+    , mTopResizeGrip(0)
 {
     setLocalBrush(QBrush(UBSettings::paletteColor));
     setPen(Qt::NoPen);
@@ -62,7 +114,38 @@ UBSelectionFrame::UBSelectionFrame()
 
     connect(UBApplication::boardController, SIGNAL(zoomChanged(qreal)), this, SLOT(onZoomChanged(qreal)));
 
+    // Resize handles. They are plain visual/hit-test children of the frame;
+    // the frame itself handles the drag in UBSelectionFrame::mouseMoveEvent().
+    const struct {
+        const char *svg;
+        QGraphicsSvgItem **svgItem;
+        QGraphicsRectItem **hitItem;
+        Qt::CursorShape cursor;
+    } grips[] = {
+        { ":/images/resize.svg",       &mBottomRightResizeGripSvgItem, &mBottomRightResizeGrip, Qt::SizeFDiagCursor },
+        { ":/images/resizeBottom.svg", &mBottomResizeGripSvgItem,      &mBottomResizeGrip,      Qt::SizeVerCursor   },
+        { ":/images/resizeLeft.svg",   &mLeftResizeGripSvgItem,        &mLeftResizeGrip,        Qt::SizeHorCursor   },
+        { ":/images/resizeRight.svg",  &mRightResizeGripSvgItem,       &mRightResizeGrip,       Qt::SizeHorCursor   },
+        { ":/images/resizeTop.svg",    &mTopResizeGripSvgItem,         &mTopResizeGrip,         Qt::SizeVerCursor   },
+    };
+
+    for (const auto &grip : grips)
+    {
+        QGraphicsSvgItem *svgItem = new QGraphicsSvgItem(grip.svg, this);
+        svgItem->setAcceptedMouseButtons(Qt::NoButton);
+        svgItem->setZValue(2);
+        *grip.svgItem = svgItem;
+
+        QGraphicsRectItem *hitItem = new QGraphicsRectItem(this);
+        hitItem->setPen(Qt::NoPen);
+        hitItem->setBrush(Qt::NoBrush);
+        hitItem->setCursor(QCursor(grip.cursor));
+        hitItem->setZValue(3);
+        *grip.hitItem = hitItem;
+    }
+
     onZoomChanged(UBApplication::boardController->currentZoom());
+    placeResizeGrips();
 }
 
 void UBSelectionFrame::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
@@ -106,13 +189,17 @@ QPainterPath UBSelectionFrame::shape() const
 
 void UBSelectionFrame::setEnclosedItems(const QList<QGraphicsItem*> pGraphicsItems)
 {
+    // Hide buttons from the previous selection; otherwise e.g. the group
+    // button remains visible after reducing the selection to a single item.
+    clearButtons();
+
     mButtons.clear();
     mButtons.append(mDeleteButton);
     mCursorRotationAngle = 0;
     mItemRotationAngle = 0;
 
     QRegion resultRegion;
-    UBGraphicsFlags resultFlags;
+    UBGraphicsFlags resultFlags = GF_NONE;
     mEnclosedtems.clear();
 
     // If at least one of the enclosed items is locked, the entire selection is
@@ -170,6 +257,36 @@ void UBSelectionFrame::updateScale()
     setScale(-UBApplication::boardController->currentZoom());
 }
 
+Qt::CursorShape UBSelectionFrame::hoverCursor(const QPointF &scenePos) const
+{
+    if (mIsLocked || mEnclosedtems.isEmpty())
+        return Qt::CrossCursor;
+
+    auto contains = [&scenePos](QGraphicsRectItem *grip) {
+        return grip && grip->isVisible()
+                && grip->contains(grip->mapFromScene(scenePos));
+    };
+
+    if (contains(mBottomRightResizeGrip))
+        return Qt::SizeFDiagCursor;
+    if (contains(mRightResizeGrip) || contains(mLeftResizeGrip))
+        return Qt::SizeHorCursor;
+    if (contains(mTopResizeGrip) || contains(mBottomResizeGrip))
+        return Qt::SizeVerCursor;
+
+    foreach (DelegateButton *button, mButtons) {
+        if (button && button->isVisible()
+                && button->contains(button->mapFromScene(scenePos)))
+            return Qt::PointingHandCursor;
+    }
+
+    // Dragging the frame ring moves the whole selection.
+    if (shape().contains(mapFromScene(scenePos)))
+        return Qt::SizeAllCursor;
+
+    return Qt::CrossCursor;
+}
+
 void UBSelectionFrame::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     mPressedPos = mLastMovedPos = event->pos();
@@ -178,7 +295,18 @@ void UBSelectionFrame::mousePressEvent(QGraphicsSceneMouseEvent *event)
     mCursorRotationAngle = 0;
     mItemRotationAngle = 0;
 
-    if (scene()->itemAt(event->scenePos(), transform()) == mRotateButton) {
+    // Snapshot every enclosed item before any modification so that move,
+    // rotate and scale operations can be restored by a single undo step.
+    foreach (UBGraphicsItemDelegate *d, mEnclosedtems) {
+        d->startUndoStep();
+    }
+
+    mCurrentScaleTool = scaleToolFromPos(event->scenePos());
+
+    if (mCurrentScaleTool != NoScale) {
+        mOperationMode = om_scaling;
+        beginGroupScale(event->scenePos());
+    } else if (scene()->itemAt(event->scenePos(), transform()) == mRotateButton) {
         mOperationMode = om_rotating;
     } else {
         mOperationMode = om_moving;
@@ -189,6 +317,12 @@ void UBSelectionFrame::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
     if (mIsLocked)
         return;
+
+    if (mOperationMode == om_scaling) {
+        applyGroupScale(event->scenePos());
+        updateRect();
+        return;
+    }
 
     QPointF dp = event->pos() - mPressedPos;
     QPointF rotCenter = mapToScene(rect().center());
@@ -281,7 +415,8 @@ void UBSelectionFrame::mouseReleaseEvent(QGraphicsSceneMouseEvent */*event*/)
 {
     mPressedPos = mLastMovedPos = mLastTranslateOffset = QPointF();
 
-    if (mOperationMode == om_moving || mOperationMode == om_rotating) {
+    if (mOperationMode == om_moving || mOperationMode == om_rotating
+            || mOperationMode == om_scaling) {
         UBApplication::undoStack->beginMacro(UBSettings::undoCommandTransactionName);
         foreach (UBGraphicsItemDelegate *d, mEnclosedtems) {
             d->commitUndoStep();
@@ -289,6 +424,9 @@ void UBSelectionFrame::mouseReleaseEvent(QGraphicsSceneMouseEvent */*event*/)
         UBApplication::undoStack->endMacro();
     }
     mOperationMode = om_idle;
+    mCurrentScaleTool = NoScale;
+    mScalingInitialTransforms.clear();
+    mScalingInitialParentSceneTransforms.clear();
 
 }
 
@@ -398,6 +536,8 @@ void UBSelectionFrame::translateItem(QGraphicsItem */*item*/, const QPointF &/*t
 
 void UBSelectionFrame::placeButtons()
 {
+    placeResizeGrips();
+
     if (!mButtons.count()) {
         return;
     }
@@ -517,6 +657,300 @@ QList<QGraphicsItem*> UBSelectionFrame::sortedByZ(const QList<QGraphicsItem *> &
     return sortedItems.values();
 }
 
+void UBSelectionFrame::showStrokeColorMenu()
+{
+    if (mEnclosedtems.isEmpty())
+        return;
+
+    const auto scenePtr = ubscene();
+    const bool darkBackground = scenePtr ? scenePtr->isDarkBackground()
+                                         : UBSettings::settings()->isDarkBackground();
+
+    // The palette holds the five fixed colors followed by the two most recent
+    // custom colors (UBSettings::colorPaletteSize == 7).
+    const QList<QColor> colors = UBSettings::settings()->penColors(darkBackground);
+
+    QMenu menu;
+
+    QWidget *swatchWidget = new QWidget(&menu);
+    QHBoxLayout *swatchLayout = new QHBoxLayout(swatchWidget);
+    swatchLayout->setContentsMargins(4, 4, 4, 4);
+    swatchLayout->setSpacing(2);
+
+    foreach (const QColor &color, colors) {
+        QToolButton *swatchButton = new QToolButton(swatchWidget);
+        swatchButton->setAutoRaise(true);
+        swatchButton->setFixedSize(24, 24);
+        swatchButton->setToolTip(color.name(QColor::HexArgb));
+
+        QPixmap swatch(18, 18);
+        swatch.fill(color);
+        QPainter swatchPainter(&swatch);
+        swatchPainter.setPen(QPen(QColor(0, 0, 0, 90), 1));
+        swatchPainter.drawRect(0, 0, swatch.width() - 1, swatch.height() - 1);
+        swatchPainter.end();
+
+        swatchButton->setIcon(QIcon(swatch));
+        swatchButton->setIconSize(QSize(18, 18));
+
+        connect(swatchButton, &QToolButton::clicked, &menu,
+                [this, &menu, color]() {
+            applyStrokeColor(color);
+            menu.close();
+        });
+
+        swatchLayout->addWidget(swatchButton);
+    }
+
+    QWidgetAction *swatchAction = new QWidgetAction(&menu);
+    swatchAction->setDefaultWidget(swatchWidget);
+    menu.addAction(swatchAction);
+    menu.addSeparator();
+
+    QAction *customAction = menu.addAction(tr("Custom Color..."));
+    connect(customAction, &QAction::triggered, &menu, [this]() {
+        const QColor currentColor = UBSettings::settings()->currentPenColor();
+        const QColor chosenColor = QColorDialog::getColor(
+                    currentColor, 0, tr("Choose stroke color"),
+                    QColorDialog::ShowAlphaChannel);
+        if (chosenColor.isValid())
+            applyStrokeColor(chosenColor);
+    });
+
+    // Anchor the popup to the button in the graphics view.
+    QPoint globalPos = QCursor::pos();
+    if (UBApplication::boardController && UBApplication::boardController->controlView()
+            && mChangeColorButton) {
+        UBBoardView *view = UBApplication::boardController->controlView();
+        const QPoint viewportPos =
+                view->mapFromScene(mChangeColorButton->sceneBoundingRect().bottomLeft());
+        globalPos = view->viewport()->mapToGlobal(viewportPos);
+    }
+
+    menu.exec(globalPos);
+}
+
+void UBSelectionFrame::applyStrokeColor(const QColor &color)
+{
+    if (!color.isValid())
+        return;
+
+    const auto scenePtr = ubscene();
+    const bool darkBackground = scenePtr ? scenePtr->isDarkBackground()
+                                         : UBSettings::settings()->isDarkBackground();
+
+    // Store the twin colors so that switching the board theme keeps the
+    // recolored strokes readable.
+    const QColor inverted = UBDrawingController::invertedColor(color);
+
+    UBGraphicsItemColorUndoCommand::ColorState after;
+    after.current = color;
+    after.light = darkBackground ? inverted : color;
+    after.dark = darkBackground ? color : inverted;
+
+    QList<UBGraphicsItemColorUndoCommand::Entry> entries;
+    QSet<QGraphicsItem*> processed;
+
+    foreach (UBGraphicsItemDelegate *d, mEnclosedtems) {
+        QList<QGraphicsItem*> strokeItems;
+        collectStrokeItems(d->delegated(), strokeItems);
+
+        foreach (QGraphicsItem *item, strokeItems) {
+            if (processed.contains(item))
+                continue;
+            processed.insert(item);
+
+            const UBGraphicsItemColorUndoCommand::ColorState before =
+                    UBGraphicsItemColorUndoCommand::stateOf(item);
+
+            if (before != after) {
+                UBGraphicsItemColorUndoCommand::Entry entry;
+                entry.item = item;
+                entry.before = before;
+                entry.after = after;
+                entries << entry;
+            }
+        }
+    }
+
+    if (entries.isEmpty())
+        return;
+
+    UBApplication::undoStack->push(new UBGraphicsItemColorUndoCommand(entries));
+    updateRect();
+}
+
+void UBSelectionFrame::placeResizeGrips()
+{
+    const qreal gripSize = qMax<qreal>(adjThickness(), 8.0);
+    // The frame border (and all DelegateButtons) live on boundingRect(); rect()
+    // is the inner content rectangle.
+    const QRectF r = boundingRect();
+    const bool visible = !mIsLocked && !mEnclosedtems.isEmpty() && !rect().isEmpty();
+
+    auto placeGrip = [gripSize](QGraphicsSvgItem *svgItem, QGraphicsRectItem *hitItem,
+                                const QRectF &hitRect) {
+        if (!svgItem || !hitItem)
+            return;
+
+        hitItem->setRect(hitRect);
+
+        const QRectF svgBounds = svgItem->boundingRect();
+        if (!svgBounds.isEmpty()) {
+            QTransform tr;
+            tr.scale(gripSize / svgBounds.width(), gripSize / svgBounds.height());
+            svgItem->setTransform(tr);
+            svgItem->setPos(hitRect.topLeft()
+                            - QPointF(svgBounds.left() * tr.m11(),
+                                      svgBounds.top() * tr.m22()));
+        }
+    };
+
+    placeGrip(mBottomRightResizeGripSvgItem, mBottomRightResizeGrip,
+              QRectF(r.right() - gripSize, r.bottom() - gripSize, gripSize, gripSize));
+    placeGrip(mBottomResizeGripSvgItem, mBottomResizeGrip,
+              QRectF(r.center().x() - gripSize / 2.0, r.bottom() - gripSize, gripSize, gripSize));
+    placeGrip(mLeftResizeGripSvgItem, mLeftResizeGrip,
+              QRectF(r.left(), r.center().y() - gripSize / 2.0, gripSize, gripSize));
+    placeGrip(mRightResizeGripSvgItem, mRightResizeGrip,
+              QRectF(r.right() - gripSize, r.center().y() - gripSize / 2.0, gripSize, gripSize));
+    placeGrip(mTopResizeGripSvgItem, mTopResizeGrip,
+              QRectF(r.center().x() - gripSize / 2.0, r.top(), gripSize, gripSize));
+
+    QGraphicsSvgItem *svgs[] = {
+        mBottomRightResizeGripSvgItem, mBottomResizeGripSvgItem,
+        mLeftResizeGripSvgItem, mRightResizeGripSvgItem, mTopResizeGripSvgItem
+    };
+    QGraphicsRectItem *hits[] = {
+        mBottomRightResizeGrip, mBottomResizeGrip,
+        mLeftResizeGrip, mRightResizeGrip, mTopResizeGrip
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        if (svgs[i])
+            svgs[i]->setVisible(visible);
+        if (hits[i])
+            hits[i]->setVisible(visible);
+    }
+}
+
+UBSelectionFrame::ScaleTool UBSelectionFrame::scaleToolFromPos(const QPointF &scenePos) const
+{
+    if (mIsLocked || mEnclosedtems.isEmpty())
+        return NoScale;
+
+    auto contains = [&scenePos](QGraphicsRectItem *grip) {
+        return grip && grip->isVisible()
+                && grip->contains(grip->mapFromScene(scenePos));
+    };
+
+    if (contains(mBottomRightResizeGrip))
+        return ScaleBottomRight;
+    if (contains(mRightResizeGrip))
+        return ScaleRight;
+    if (contains(mLeftResizeGrip))
+        return ScaleLeft;
+    if (contains(mBottomResizeGrip))
+        return ScaleBottom;
+    if (contains(mTopResizeGrip))
+        return ScaleTop;
+
+    return NoScale;
+}
+
+void UBSelectionFrame::beginGroupScale(const QPointF &/*scenePos*/)
+{
+    mScalingStartBounds = rect();
+    mScalingInitialTransforms.clear();
+    mScalingInitialParentSceneTransforms.clear();
+
+    foreach (UBGraphicsItemDelegate *d, mEnclosedtems) {
+        QGraphicsItem *item = d->delegated();
+        mScalingInitialTransforms.insert(item, item->transform());
+        mScalingInitialParentSceneTransforms.insert(
+                    item,
+                    item->parentItem() ? item->parentItem()->sceneTransform()
+                                       : QTransform());
+    }
+}
+
+void UBSelectionFrame::applyGroupScale(const QPointF &scenePos)
+{
+    const QRectF startBounds = mScalingStartBounds;
+    if (startBounds.width() <= 0.0 || startBounds.height() <= 0.0)
+        return;
+
+    qreal scaleX = 1.0;
+    qreal scaleY = 1.0;
+    QPointF fixedPoint = startBounds.topLeft();
+
+    switch (mCurrentScaleTool) {
+    case ScaleBottomRight: {
+        // Corner scaling keeps the group aspect ratio.
+        const qreal sx = (scenePos.x() - startBounds.left()) / startBounds.width();
+        const qreal sy = (scenePos.y() - startBounds.top()) / startBounds.height();
+        if (sx > 0.0 && sy > 0.0) {
+            const qreal scale = (sx + sy) / 2.0;
+            scaleX = scale;
+            scaleY = scale;
+        }
+        break;
+    }
+    case ScaleRight:
+        fixedPoint = startBounds.topLeft();
+        scaleX = (scenePos.x() - startBounds.left()) / startBounds.width();
+        break;
+    case ScaleLeft:
+        fixedPoint = startBounds.topRight();
+        scaleX = (startBounds.right() - scenePos.x()) / startBounds.width();
+        break;
+    case ScaleBottom:
+        fixedPoint = startBounds.topLeft();
+        scaleY = (scenePos.y() - startBounds.top()) / startBounds.height();
+        break;
+    case ScaleTop:
+        fixedPoint = startBounds.bottomLeft();
+        scaleY = (startBounds.bottom() - scenePos.y()) / startBounds.height();
+        break;
+    default:
+        return;
+    }
+
+    // Never flip or collapse the selection.
+    const qreal minScale = 0.02;
+    scaleX = qMax(scaleX, minScale);
+    scaleY = qMax(scaleY, minScale);
+
+    QTransform scaling;
+    scaling.translate(fixedPoint.x(), fixedPoint.y());
+    scaling.scale(scaleX, scaleY);
+    scaling.translate(-fixedPoint.x(), -fixedPoint.y());
+
+    for (auto it = mScalingInitialTransforms.cbegin();
+         it != mScalingInitialTransforms.cend(); ++it)
+    {
+        QGraphicsItem *item = it.key();
+        const QTransform initialTransform = it.value();
+        const QTransform parentSceneTransform =
+                mScalingInitialParentSceneTransforms.value(item);
+
+        // Qt composes an item's scene transform as:
+        //     transform() * translate(pos()) * parentSceneTransform
+        // Keeping pos() untouched and inserting the scaling at the end gives
+        // the exact scene-space result, without re-applying translations.
+        const QPointF pos = item->pos();
+        const QTransform newTransform =
+                initialTransform
+                * QTransform::fromTranslate(pos.x(), pos.y())
+                * parentSceneTransform
+                * scaling
+                * parentSceneTransform.inverted()
+                * QTransform::fromTranslate(-pos.x(), -pos.y());
+
+        item->setTransform(newTransform);
+    }
+}
+
 QList<DelegateButton*> UBSelectionFrame::buttonsForFlags(UBGraphicsFlags fls) {
 
     QList<DelegateButton*> result;
@@ -535,7 +969,29 @@ QList<DelegateButton*> UBSelectionFrame::buttonsForFlags(UBGraphicsFlags fls) {
         result <<  mDuplicateButton;
     }
 
-    if (mEnclosedtems.count() >= 1) {
+    // "Change stroke color" is only meaningful when the selection actually
+    // contains stroke/vector items.
+    bool hasStrokeItems = false;
+    foreach (UBGraphicsItemDelegate *d, mEnclosedtems) {
+        QList<QGraphicsItem*> strokeItems;
+        collectStrokeItems(d->delegated(), strokeItems);
+        if (!strokeItems.isEmpty()) {
+            hasStrokeItems = true;
+            break;
+        }
+    }
+
+    if (hasStrokeItems) {
+        if (!mChangeColorButton) {
+            mChangeColorButton = new DelegateButton(":/images/color.svg", this, 0, Qt::TopLeftSection);
+            mChangeColorButton->setShowProgressIndicator(false);
+            mChangeColorButton->setToolTip(tr("Apply the current pen color to the selected strokes"));
+            connect(mChangeColorButton, SIGNAL(clicked(bool)), this, SLOT(showStrokeColorMenu()));
+        }
+        result << mChangeColorButton;
+    }
+
+    if (mEnclosedtems.count() >= 2) {
         if (!mGroupButton) {
             mGroupButton = new DelegateButton(":/images/groupItems.svg", this, 0, Qt::TopLeftSection);
             mGroupButton->setShowProgressIndicator(false);

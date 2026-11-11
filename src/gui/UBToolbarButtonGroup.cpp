@@ -68,12 +68,15 @@ UBToolbarButtonGroup::UBToolbarButtonGroup(QToolBar *toolBar, const QList<QActio
 
     foreach(QAction *action, actions)
     {
-        mActionGroup->addAction(action);
+        // Only checkable actions are part of the exclusive color group. The
+        // custom-color picker is a plain action button at the end of the group.
+        if (action->isCheckable())
+            mActionGroup->addAction(action);
 
         QToolButton *button = new QToolButton(this);
         mButtons.append(button);
         button->setDefaultAction(action);
-        button->setCheckable(true);
+        button->setCheckable(action->isCheckable());
 
         if(i == 0)
         {
@@ -95,7 +98,8 @@ UBToolbarButtonGroup::UBToolbarButtonGroup(QToolBar *toolBar, const QList<QActio
                 : button->setObjectName("ubButtonGroupCenter");
         }
 
-        connect(button, SIGNAL(triggered(QAction*)), this, SLOT(selected(QAction*)));
+        if (action->isCheckable())
+            connect(button, SIGNAL(triggered(QAction*)), this, SLOT(selected(QAction*)));
 
         horizontalLayout->addWidget(button);
         mLabel = action->text();
@@ -190,6 +194,26 @@ void UBToolbarButtonGroup::setCurrentIndex(int index)
     }
 }
 
+void UBToolbarButtonGroup::clearSelection()
+{
+    if (mCurrentIndex == -1)
+        return;
+
+    // Temporarily disable the exclusive QActionGroup so the currently checked
+    // button can be unchecked programmatically.
+    const bool exclusive = mActionGroup->isExclusive();
+    mActionGroup->setExclusive(false);
+
+    for (QToolButton *button : mButtons)
+        button->setChecked(false);
+
+    mActionGroup->setExclusive(exclusive);
+
+    mCurrentIndex = -1;
+    emit currentIndexChanged(-1);
+}
+
+
 void UBToolbarButtonGroup::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -228,8 +252,9 @@ void UBToolbarButtonGroup::colorPaletteChanged()
 
     QList<QColor> colors;
 
-    if (UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Pen 
-        || UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Line)
+    if (UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Pen
+        || UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Line
+        || UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Laser)
     {
         colors = UBSettings::settings()->penColors(isDarkBackground);
     }
@@ -240,7 +265,8 @@ void UBToolbarButtonGroup::colorPaletteChanged()
 
     for (int i = 0; i < mButtons.size() && i < colors.size(); i++)
     {
-        setColor(colors.at(i), i);
+        if (mActions.at(i)->isCheckable())
+            setColor(colors.at(i), i);
     }
 }
 
@@ -248,6 +274,9 @@ void UBToolbarButtonGroup::displayText(QVariant display)
 {
     mDisplayLabel = display.toBool();
     QVBoxLayout* verticalLayout = (QVBoxLayout*)layout();
-    verticalLayout->setStretch(2, mDisplayLabel ? 1 : 0);
+    // Keep the button row vertically centered whether or not the group label
+    // is painted underneath the icons (labels are hidden in compact mode).
+    verticalLayout->setStretch(0, 1);
+    verticalLayout->setStretch(2, 1);
     update();
 }

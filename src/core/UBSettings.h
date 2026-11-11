@@ -64,6 +64,8 @@ class UBSettings : public QObject
         int penWidthIndex();
 
         qreal currentPenWidth();
+        qreal penStrongWidth();
+        void setPenStrongWidth(qreal width);
 
         int penColorIndex();
         QColor currentPenColor();
@@ -73,6 +75,8 @@ class UBSettings : public QObject
         // Marker related
         int markerWidthIndex();
         qreal currentMarkerWidth();
+        qreal markerStrongWidth();
+        void setMarkerStrongWidth(qreal width);
         int markerColorIndex();
         QColor currentMarkerColor();
         QColor markerColor(bool onDarkBackground);
@@ -296,6 +300,13 @@ class UBSettings : public QObject
         UBSetting* boardSimplifyMarkerStrokes;
 
         UBSetting* boardKeyboardPaletteKeyBtnSize;
+
+        // When enabled, rubber-band selection only keeps stroke/vector items.
+        UBSetting* boardStrokeOnlySelection;
+
+        // Divides the grid step used for magnet snapping. A value of 2 makes
+        // items snap at half the visible grid spacing (finer magnet snapping).
+        UBSetting* boardGridSnapDivisor;
 
         UBSetting* appStartMode;
 

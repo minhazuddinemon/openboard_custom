@@ -30,11 +30,13 @@
 #include "UBBoardController.h"
 
 #include <QtWidgets>
+#include <QColorDialog>
 
 #include "adaptors/UBMetadataDcSubsetAdaptor.h"
 #include "adaptors/UBSvgSubsetAdaptor.h"
 
 #include "board/UBBoardPaletteManager.h"
+#include "gui/UBStylusPalette.h"
 #include "board/UBBoardView.h"
 #include "board/UBDrawingController.h"
 #include "board/UBFeaturesController.h"
@@ -86,12 +88,144 @@
 
 #include "core/memcheck.h"
 
+namespace {
+
+QIcon createCustomColorPickerIcon()
+{
+    constexpr int iconSize = 32;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor border = QApplication::palette().color(QPalette::Mid);
+    const QColor plus = QApplication::palette().color(QPalette::Text);
+
+    painter.setPen(QPen(border, 1.5));
+    painter.drawRoundedRect(QRectF(2.0, 2.0, iconSize - 4.0, iconSize - 4.0), 4.0, 4.0);
+
+    painter.setPen(QPen(plus, 2.5));
+    painter.drawLine(QPointF(iconSize / 2.0, 8.0), QPointF(iconSize / 2.0, iconSize - 8.0));
+    painter.drawLine(QPointF(8.0, iconSize / 2.0), QPointF(iconSize - 8.0, iconSize / 2.0));
+
+    return QIcon(pixmap);
+}
+
+QIcon createWidthSettingsIcon()
+{
+    constexpr int iconSize = 32;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor track = QApplication::palette().color(QPalette::Text);
+    const QColor knob = QApplication::palette().color(QPalette::Base);
+    const int rows[] = { 9, 16, 23 };
+    const int knobs[] = { 11, 21, 14 };
+
+    for (int i = 0; i < 3; ++i)
+    {
+        painter.setPen(QPen(track, 1.5));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(QPointF(4.0, rows[i]), QPointF(iconSize - 4.0, rows[i]));
+
+        painter.setBrush(knob);
+        painter.setPen(QPen(track, 1.0));
+        painter.drawEllipse(QPointF(knobs[i], rows[i]), 3.0, 3.0);
+    }
+
+    return QIcon(pixmap);
+}
+
+QIcon createLineWidthIcon(qreal width)
+{
+    constexpr int iconSize = 32;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const qreal ratio = qBound<qreal>(0.0, width / 60.0, 1.0);
+    const qreal strokeWidth = 1.0 + ratio * 14.0;
+
+    painter.setPen(QPen(QApplication::palette().color(QPalette::Text),
+                        strokeWidth, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(5.0, iconSize / 2.0),
+                     QPointF(iconSize - 5.0, iconSize / 2.0));
+
+    return QIcon(pixmap);
+}
+
+QIcon createEraserWidthIcon(qreal width)
+{
+    constexpr int iconSize = 32;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const qreal ratio = qBound<qreal>(0.0, width / 300.0, 1.0);
+    const qreal diameter = 6.0 + ratio * 20.0;
+    const QRectF rect((iconSize - diameter) / 2.0,
+                      (iconSize - diameter) / 2.0,
+                      diameter, diameter);
+
+    painter.setPen(QPen(QApplication::palette().color(QPalette::Text), 1.5));
+    painter.setBrush(QApplication::palette().color(QPalette::Button));
+    painter.drawEllipse(rect);
+
+    return QIcon(pixmap);
+}
+
+QIcon createStrokeEraserIcon()
+{
+    constexpr int iconSize = 32;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor ink = QApplication::palette().color(QPalette::Text);
+    const QColor paper = QApplication::palette().color(QPalette::Base);
+
+    // Vector line with a small erased gap.
+    painter.setPen(QPen(ink, 3.0, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(4.0, 10.0), QPointF(17.0, 10.0));
+    painter.drawLine(QPointF(23.0, 10.0), QPointF(28.0, 10.0));
+
+    // Eraser block touching the line.
+    painter.save();
+    painter.translate(21.0, 21.0);
+    painter.rotate(-30.0);
+    painter.setPen(QPen(ink, 1.5));
+    painter.setBrush(paper);
+    painter.drawRoundedRect(QRectF(-8.0, -6.0, 16.0, 12.0), 2.0, 2.0);
+    painter.restore();
+
+    // Precision contact dot.
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(ink);
+    painter.drawEllipse(QPointF(20.0, 10.0), 2.5, 2.5);
+
+    return QIcon(pixmap);
+}
+
+} // namespace
+
 UBBoardController::UBBoardController(UBMainWindow* mainWindow)
     : UBDocumentContainer(mainWindow->centralWidget())
     , mMainWindow(mainWindow)
     , mActiveScene(0)
     , mActiveSceneIndex(-1)
     , mPaletteManager(0)
+    , mEraserWidthChoice(nullptr)
+    , mStrokeEraserActionIndex(-1)
     , mSoftwareUpdateDialog(0)
     , mMessageWindow(0)
     , mEmbedController(nullptr)
@@ -245,6 +379,11 @@ void UBBoardController::setupLayout()
 {
     if(mPaletteManager)
         mPaletteManager->setupLayout();
+
+    // Apply the stylus-palette clearance offset as soon as the palettes have
+    // been laid out, so the initial board view is centered correctly from the
+    // start instead of only after the first clear/resize.
+    centerOnDefaultPosition();
 }
 
 
@@ -349,7 +488,8 @@ void UBBoardController::setupToolbar()
 {
     UBSettings *settings = UBSettings::settings();
 
-    // Setup color choice widget
+    // Setup color choice widget: five fixed colors, the two most recent
+    // custom colors and a custom-color picker (8 buttons in total).
     QList<QAction *> colorActions;
     colorActions.append(mMainWindow->actionColor0);
     colorActions.append(mMainWindow->actionColor1);
@@ -357,32 +497,62 @@ void UBBoardController::setupToolbar()
     colorActions.append(mMainWindow->actionColor3);
     colorActions.append(mMainWindow->actionColor4);
 
+    QAction *recentCustomColor1 = new QAction(tr("Custom 1"), mMainWindow->boardToolBar);
+    recentCustomColor1->setCheckable(true);
+    recentCustomColor1->setToolTip(tr("Most recent custom color"));
+
+    QAction *recentCustomColor2 = new QAction(tr("Custom 2"), mMainWindow->boardToolBar);
+    recentCustomColor2->setCheckable(true);
+    recentCustomColor2->setToolTip(tr("Previous custom color"));
+
+    QAction *customColorPicker = new QAction(tr("Custom color..."), mMainWindow->boardToolBar);
+    customColorPicker->setCheckable(false);
+    customColorPicker->setToolTip(tr("Choose a custom color"));
+
+    colorActions << recentCustomColor1 << recentCustomColor2 << customColorPicker;
+
     UBToolbarButtonGroup *colorChoice =
             new UBToolbarButtonGroup(mMainWindow->boardToolBar, colorActions);
     colorChoice->setLabel(tr("Color"));
+    colorChoice->setIcon(createCustomColorPickerIcon(), colorActions.size() - 1);
 
+    // Inserting the (now wider) color group before the background group
+    // reflows the following toolbar groups automatically.
     mMainWindow->boardToolBar->insertWidget(mMainWindow->actionBackgrounds, colorChoice);
 
     connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), colorChoice, SLOT(displayText(QVariant)));
     connect(colorChoice, SIGNAL(activated(int)), this, SLOT(setColorIndex(int)));
+    connect(customColorPicker, SIGNAL(triggered(bool)), this, SLOT(openCustomColorDialog()));
     connect(UBDrawingController::drawingController(), SIGNAL(colorIndexChanged(int)), colorChoice, SLOT(setCurrentIndex(int)));
     connect(UBDrawingController::drawingController(), SIGNAL(colorIndexChanged(int)), UBDrawingController::drawingController(), SIGNAL(colorPaletteChanged()));
     connect(UBDrawingController::drawingController(), SIGNAL(colorPaletteChanged()), colorChoice, SLOT(colorPaletteChanged()));
     connect(UBDrawingController::drawingController(), SIGNAL(colorPaletteChanged()), this, SLOT(colorPaletteChanged()));
 
-    colorChoice->displayText(QVariant(settings->appToolBarDisplayText->get().toBool()));
-    colorChoice->colorPaletteChanged();
-    colorChoice->setCurrentIndex(settings->penColorIndex());
-    colorActions.at(settings->penColorIndex())->setChecked(true);
+    // Never select the picker action itself: the last valid color index is the
+    // second recent-custom-color slot (slot 7).
+    const int initialColorIndex = qBound(0, settings->penColorIndex(), colorActions.size() - 2);
 
-    // Setup line width choice widget
+    colorChoice->displayText(QVariant(false)); // icon-only: keep the toolbar compact
+    colorChoice->colorPaletteChanged();
+    colorChoice->setCurrentIndex(initialColorIndex);
+    colorActions.at(initialColorIndex)->setChecked(true);
+
+    // Setup line width choice widget: Fine, Medium, Custom (slot 3) and the
+    // slider/settings trigger (slot 4).
+    QAction *lineWidthSettings = new QAction(tr("Adjust"), mMainWindow->boardToolBar);
+    lineWidthSettings->setCheckable(false);
+    lineWidthSettings->setToolTip(tr("Adjust custom line width"));
+    lineWidthSettings->setIcon(createWidthSettingsIcon());
+
     QList<QAction *> lineWidthActions;
     lineWidthActions.append(mMainWindow->actionLineSmall);
     lineWidthActions.append(mMainWindow->actionLineMedium);
     lineWidthActions.append(mMainWindow->actionLineLarge);
+    lineWidthActions.append(lineWidthSettings);
 
     UBToolbarButtonGroup *lineWidthChoice =
             new UBToolbarButtonGroup(mMainWindow->boardToolBar, lineWidthActions);
+    lineWidthChoice->setLabel(tr("Line"));
 
     connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), lineWidthChoice, SLOT(displayText(QVariant)));
 
@@ -392,31 +562,66 @@ void UBBoardController::setupToolbar()
     connect(UBDrawingController::drawingController(), SIGNAL(lineWidthIndexChanged(int))
             , lineWidthChoice, SLOT(setCurrentIndex(int)));
 
-    lineWidthChoice->displayText(QVariant(settings->appToolBarDisplayText->get().toBool()));
-    lineWidthChoice->setCurrentIndex(settings->penWidthIndex());
-    lineWidthActions.at(settings->penWidthIndex())->setChecked(true);
+    connect(lineWidthSettings, SIGNAL(triggered(bool)), this, SLOT(openLineWidthSlider()));
+    connect(UBDrawingController::drawingController(), SIGNAL(lineWidthIndexChanged(int))
+            , this, SLOT(updateWidthButtonIcons()));
+    connect(UBDrawingController::drawingController(), SIGNAL(stylusToolChanged(int, int))
+            , this, SLOT(updateWidthButtonIcons()));
+
+    const int initialLineWidthIndex = qBound(0, settings->penWidthIndex(), lineWidthActions.size() - 2);
+
+    lineWidthChoice->displayText(QVariant(false)); // icon-only: keep the toolbar compact
+    lineWidthChoice->setCurrentIndex(initialLineWidthIndex);
+    lineWidthActions.at(initialLineWidthIndex)->setChecked(true);
 
     mMainWindow->boardToolBar->insertWidget(mMainWindow->actionBackgrounds, lineWidthChoice);
 
     //-----------------------------------------------------------//
     // Setup eraser width choice widget
 
+    QAction *eraserWidthSettings = new QAction(tr("Adjust"), mMainWindow->boardToolBar);
+    eraserWidthSettings->setCheckable(false);
+    eraserWidthSettings->setToolTip(tr("Adjust custom eraser size"));
+    eraserWidthSettings->setIcon(createWidthSettingsIcon());
+
+    QAction *strokeEraser = new QAction(tr("Stroke"), mMainWindow->boardToolBar);
+    strokeEraser->setCheckable(true);
+    strokeEraser->setToolTip(tr("Stroke eraser (removes whole strokes)"));
+    strokeEraser->setIcon(createStrokeEraserIcon());
+
     QList<QAction *> eraserWidthActions;
     eraserWidthActions.append(mMainWindow->actionEraserSmall);
     eraserWidthActions.append(mMainWindow->actionEraserMedium);
     eraserWidthActions.append(mMainWindow->actionEraserLarge);
+    eraserWidthActions.append(eraserWidthSettings);
+    eraserWidthActions.append(strokeEraser); // slot 5
 
     UBToolbarButtonGroup *eraserWidthChoice =
             new UBToolbarButtonGroup(mMainWindow->boardToolBar, eraserWidthActions);
+    eraserWidthChoice->setLabel(tr("Eraser"));
+
+    mEraserWidthChoice = eraserWidthChoice;
+    mStrokeEraserActionIndex = eraserWidthActions.size() - 1;
 
     mMainWindow->boardToolBar->insertWidget(mMainWindow->actionBackgrounds, eraserWidthChoice);
 
     connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), eraserWidthChoice, SLOT(displayText(QVariant)));
-    connect(eraserWidthChoice, SIGNAL(activated(int)), UBDrawingController::drawingController(), SLOT(setEraserWidthIndex(int)));
+    connect(eraserWidthChoice, SIGNAL(activated(int)), this, SLOT(eraserWidthActionActivated(int)));
+    connect(eraserWidthSettings, SIGNAL(triggered(bool)), this, SLOT(openEraserWidthSlider()));
+    connect(UBDrawingController::drawingController(), SIGNAL(eraserWidthIndexChanged(int))
+            , eraserWidthChoice, SLOT(setCurrentIndex(int)));
+    connect(UBDrawingController::drawingController(), SIGNAL(eraserWidthIndexChanged(int))
+            , this, SLOT(updateWidthButtonIcons()));
+    connect(UBDrawingController::drawingController(), SIGNAL(stylusToolChanged(int, int))
+            , this, SLOT(eraserToolChanged(int)));
 
-    eraserWidthChoice->displayText(QVariant(settings->appToolBarDisplayText->get().toBool()));
-    eraserWidthChoice->setCurrentIndex(settings->eraserWidthIndex());
-    eraserWidthActions.at(settings->eraserWidthIndex())->setChecked(true);
+    const int initialEraserWidthIndex = qBound(0, settings->eraserWidthIndex(), int(UBWidth::Strong));
+
+    eraserWidthChoice->displayText(QVariant(false)); // icon-only: keep the toolbar compact
+    eraserWidthChoice->setCurrentIndex(initialEraserWidthIndex);
+    eraserWidthActions.at(initialEraserWidthIndex)->setChecked(true);
+
+    updateWidthButtonIcons();
 
     mMainWindow->boardToolBar->insertSeparator(mMainWindow->actionBackgrounds);
 
@@ -433,8 +638,11 @@ void UBBoardController::setupToolbar()
 
     connectToolbar();
     initToolbarTexts();
+    setToolbarTexts();
 
-    UBApplication::app()->toolBarDisplayTextChanged(QVariant(settings->appToolBarDisplayText->get().toBool()));
+    // Force icon-only labels on the main toolbars to reclaim vertical drawing
+    // space on the board (labels under icons are not shown anymore).
+    UBApplication::app()->toolBarDisplayTextChanged(QVariant(false));
 }
 
 
@@ -596,10 +804,12 @@ void UBBoardController::setToolbarTexts()
 {
     QSize iconSize;
 
+    // Compact icon-only toolbar: keep icons small so the toolbar height (and
+    // the vertical space it steals from the canvas) stays minimal.
     if (mMainWindow->width() <= 1280)
-        iconSize = QSize(24, 24);
+        iconSize = QSize(22, 22);
     else
-        iconSize = QSize(48, 32);
+        iconSize = QSize(26, 26);
 
     mMainWindow->boardToolBar->setIconSize(iconSize);
     mMainWindow->webToolBar->setIconSize(iconSize);
@@ -938,6 +1148,7 @@ void UBBoardController::clearScene()
         freezeW3CWidgets(true);
         mActiveScene->clearContent(UBGraphicsScene::clearItemsAndAnnotations);
         updateActionStates();
+        centerOnDefaultPosition();
     }
 }
 
@@ -949,6 +1160,7 @@ void UBBoardController::clearSceneItems()
         freezeW3CWidgets(true);
         mActiveScene->clearContent(UBGraphicsScene::clearItems);
         updateActionStates();
+        centerOnDefaultPosition();
     }
 }
 
@@ -959,6 +1171,7 @@ void UBBoardController::clearSceneAnnotation()
     {
         mActiveScene->clearContent(UBGraphicsScene::clearAnnotations);
         updateActionStates();
+        centerOnDefaultPosition();
     }
 }
 
@@ -968,6 +1181,7 @@ void UBBoardController::clearSceneBackground()
     {
         mActiveScene->clearContent(UBGraphicsScene::clearBackground);
         updateActionStates();
+        centerOnDefaultPosition();
     }
 }
 
@@ -1049,9 +1263,9 @@ void UBBoardController::zoomRestore()
 
 void UBBoardController::centerRestore()
 {
-    // reset transformation and scrollbar values
-    centerOn({0, 0});
-    mControlView->centerOn({0, 0});
+    // reset transformation and scrollbar values, leaving room for the
+    // left-docked stylus palette
+    centerOnDefaultPosition();
 
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
     // workaround: foreground not repainted after scrolling on Qt5 (fixed in Qt6)
@@ -1079,6 +1293,49 @@ void UBBoardController::centerOn(QPointF scenePoint) const
     {
         UBApplication::applicationController->adjustDisplayView();
     }
+}
+
+
+void UBBoardController::centerOnDefaultPosition()
+{
+    if (!mControlView)
+        return;
+
+    qreal paletteClearance = 0.0;
+
+    // The offset only makes sense for the left-docked (vertical) palette;
+    // a bottom-docked palette must not shift the page horizontally.
+    const bool verticalPalette =
+            UBSettings::settings()->appToolBarOrientationVertical->get().toBool();
+
+    UBStylusPalette* stylusPalette = mPaletteManager ? mPaletteManager->stylusPalette() : 0;
+
+    // Use isHidden() rather than isVisible(): at startup the palette is
+    // already shown/laid out but its top-level window may not be visible yet,
+    // which would otherwise suppress the offset on initial page load.
+    if (verticalPalette && stylusPalette && !stylusPalette->isHidden()
+            && stylusPalette->width() > 0)
+    {
+        // Reserve half of the stylus palette width so the page content is
+        // centred in the canvas area to the right of the palette.
+        paletteClearance = stylusPalette->width() / 2.0;
+    }
+
+    const qreal scale = mControlView->transform().m11();
+    const qreal sceneOffset = (scale != 0.0) ? paletteClearance / scale : paletteClearance;
+
+    // Centering on a point left of the origin shifts the page to the right.
+    const QPointF target(-sceneOffset, 0.0);
+
+    centerOn(target);
+    mControlView->centerOn(target);
+
+#if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
+    // workaround: foreground not repainted after scrolling on Qt5
+    mControlView->setForegroundBrush(mControlView->foregroundBrush());
+#endif
+
+    persistViewPositionOnCurrentScene();
 }
 
 
@@ -1731,6 +1988,11 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
         pDocumentProxy->setDefaultDocumentSize(mActiveScene->nominalSize());
         updatePageSizeState();
 
+        // Every page load/switch restores the per-page view state above; apply
+        // the stylus-palette clearance offset afterwards so pages are centered
+        // in the visible canvas by default.
+        centerOnDefaultPosition();
+
         adjustDisplayViews();
 
         UBSettings::settings()->setDarkBackground(mActiveScene->isDarkBackground());
@@ -1936,7 +2198,7 @@ void UBBoardController::boardViewResized(QResizeEvent* event)
 
     updateSystemScaleFactor();
 
-    mControlView->centerOn(0,0);
+    centerOnDefaultPosition();
 
     if (mDisplayView && UBApplication::displayManager->hasDisplay()) {
         UBApplication::applicationController->adjustDisplayView();
@@ -2106,6 +2368,23 @@ void UBBoardController::lastWindowClosed()
 
 void UBBoardController::setColorIndex(int pColorIndex)
 {
+    UBDrawingController* drawingController = UBDrawingController::drawingController();
+
+    // When the laser pointer is active, clicking a swatch only updates the
+    // laser colour. It must not switch the current tool back to the pen.
+    if (drawingController->stylusTool() == UBStylusTool::Laser)
+    {
+        drawingController->setColorIndex(pColorIndex);
+
+        const QList<QColor> colors =
+                UBSettings::settings()->penColors(UBSettings::settings()->isDarkBackground());
+
+        if (pColorIndex >= 0 && pColorIndex < colors.size())
+            drawingController->setLaserColor(colors.at(pColorIndex));
+
+        return;
+    }
+
     UBDrawingController::drawingController()->setColorIndex(pColorIndex);
 
     if (UBDrawingController::drawingController()->stylusTool() != UBStylusTool::Marker &&
@@ -2149,6 +2428,146 @@ void UBBoardController::colorPaletteChanged()
     mPenColorOnLightBackground = UBSettings::settings()->penColor(false);
     mMarkerColorOnDarkBackground = UBSettings::settings()->markerColor(true);
     mMarkerColorOnLightBackground = UBSettings::settings()->markerColor(false);
+}
+
+
+void UBBoardController::openCustomColorDialog()
+{
+    UBDrawingController *drawingController = UBDrawingController::drawingController();
+
+    const QColor color = QColorDialog::getColor(drawingController->currentToolColor(),
+                                                 mMainWindow,
+                                                 tr("Select Custom Color"));
+
+    if (!color.isValid())
+        return;
+
+    // Compute and persist the dark/light pair, then select the most recent
+    // custom slot exactly like a regular swatch would.
+    drawingController->setCustomColor(color);
+    setColorIndex(UBDrawingController::CustomColorStartIndex);
+}
+
+
+void UBBoardController::openLineWidthSlider()
+{
+    showWidthSliderPopup(qobject_cast<QAction *>(sender()), true);
+}
+
+
+void UBBoardController::openEraserWidthSlider()
+{
+    showWidthSliderPopup(qobject_cast<QAction *>(sender()), false);
+}
+
+
+void UBBoardController::showWidthSliderPopup(QAction *anchorAction, bool lineWidth)
+{
+    UBSettings *settings = UBSettings::settings();
+    UBDrawingController *drawingController = UBDrawingController::drawingController();
+
+    const int minimum = lineWidth ? 1 : 10;
+    const int maximum = lineWidth ? 60 : 300;
+
+    const qreal currentWidth = lineWidth
+            ? (drawingController->stylusTool() == UBStylusTool::Marker
+                   ? settings->markerStrongWidth()
+                   : settings->penStrongWidth())
+            : settings->eraserStrongWidth();
+
+    QMenu menu(mMainWindow);
+    QWidget *container = new QWidget();
+    QVBoxLayout *layout = new QVBoxLayout(container);
+    QLabel *valueLabel = new QLabel(container);
+    QSlider *slider = new QSlider(Qt::Horizontal, container);
+
+    slider->setRange(minimum, maximum);
+    slider->setValue(qBound(minimum, qRound(currentWidth), maximum));
+    slider->setSingleStep(1);
+    slider->setPageStep(lineWidth ? 5 : 10);
+    slider->setTickPosition(QSlider::TicksBelow);
+    slider->setTickInterval(lineWidth ? 10 : 50);
+    slider->setMinimumWidth(200);
+
+    valueLabel->setAlignment(Qt::AlignCenter);
+    valueLabel->setText(tr("%1 px").arg(slider->value()));
+
+    layout->addWidget(valueLabel);
+    layout->addWidget(slider);
+    layout->setContentsMargins(10, 8, 10, 8);
+    container->setLayout(layout);
+
+    QWidgetAction *widgetAction = new QWidgetAction(&menu);
+    widgetAction->setDefaultWidget(container);
+    menu.addAction(widgetAction);
+
+    connect(slider, &QSlider::valueChanged, &menu, [this, lineWidth, valueLabel](int value)
+    {
+        valueLabel->setText(tr("%1 px").arg(value));
+
+        if (lineWidth)
+            UBDrawingController::drawingController()->setCustomLineWidth(value);
+        else
+            UBDrawingController::drawingController()->setCustomEraserWidth(value);
+    });
+
+    QWidget *anchor = mMainWindow->boardToolBar;
+    if (anchorAction)
+    {
+        const QList<QWidget *> widgets = anchorAction->associatedWidgets();
+        for (QWidget *widget : widgets)
+        {
+            if (qobject_cast<QToolButton *>(widget))
+            {
+                anchor = widget;
+                break;
+            }
+        }
+    }
+
+    menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
+}
+
+
+void UBBoardController::updateWidthButtonIcons()
+{
+    UBSettings *settings = UBSettings::settings();
+    const bool markerActive =
+            UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Marker;
+
+    const qreal lineWidth = markerActive ? settings->markerStrongWidth()
+                                         : settings->penStrongWidth();
+    mMainWindow->actionLineLarge->setIcon(createLineWidthIcon(lineWidth));
+    mMainWindow->actionLineLarge->setToolTip(tr("Custom Line Width (%1 px)").arg(qRound(lineWidth)));
+
+    const qreal eraserWidth = settings->eraserStrongWidth();
+    mMainWindow->actionEraserLarge->setIcon(createEraserWidthIcon(eraserWidth));
+    mMainWindow->actionEraserLarge->setToolTip(tr("Custom Eraser Size (%1 px)").arg(qRound(eraserWidth)));
+}
+
+
+void UBBoardController::eraserWidthActionActivated(int index)
+{
+    UBDrawingController *drawingController = UBDrawingController::drawingController();
+
+    if (index == mStrokeEraserActionIndex)
+        drawingController->setStylusTool(UBStylusTool::StrokeEraser);
+    else if (index >= 0 && index <= int(UBWidth::Strong))
+        drawingController->setEraserWidthIndex(index);
+}
+
+
+void UBBoardController::eraserToolChanged(int tool)
+{
+    if (!mEraserWidthChoice)
+        return;
+
+    if (tool == UBStylusTool::StrokeEraser)
+        mEraserWidthChoice->setCurrentIndex(mStrokeEraserActionIndex);
+    else if (tool == UBStylusTool::Eraser)
+        mEraserWidthChoice->setCurrentIndex(UBSettings::settings()->eraserWidthIndex());
+    else if (mEraserWidthChoice->currentIndex() == mStrokeEraserActionIndex)
+        mEraserWidthChoice->clearSelection();
 }
 
 

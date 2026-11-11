@@ -51,7 +51,9 @@ int UBSettings::defaultCrossSize = 24;
 int UBSettings::minCrossSize = 12;
 int UBSettings::maxCrossSize = 96; //TODO: user-settable?
 bool UBSettings::intermediateLines = false;
-int UBSettings::colorPaletteSize = 5;
+// Five fixed colors (slots 1-5) followed by two recent custom colors
+// (slots 6-7). Slot 8 of the toolbar is the custom color picker.
+int UBSettings::colorPaletteSize = 7;
 int UBSettings::objectFrameWidth = 20;
 int UBSettings::boardMargin = 10;
 
@@ -241,7 +243,7 @@ void UBSettings::init()
     documentSizes.insert(DocumentSizeRatio::Ratio16_9, QSize((960 / 9 * 16), 960)); // 1.77
 
     appToolBarPositionedAtTop = new UBSetting(this, "App", "ToolBarPositionedAtTop", true);
-    appToolBarDisplayText = new UBSetting(this, "App", "ToolBarDisplayText", true);
+    appToolBarDisplayText = new UBSetting(this, "App", "ToolBarDisplayText", false);
     appEnableAutomaticSoftwareUpdates = new UBSetting(this, "App", "EnableAutomaticSoftwareUpdates", false);
     appSoftwareUpdateURL = new UBSetting(this, "App", "SoftwareUpdateURL", "http://www.openboard.ch/update.json");
     appHideCheckForSoftwareUpdate = new UBSetting(this, "App", "HideCheckForSoftwareUpdate", false);
@@ -296,6 +298,10 @@ void UBSettings::init()
 
     boardKeyboardPaletteKeyBtnSize = new UBSetting(this, "Board", "KeyboardPaletteKeyBtnSize", "16x16");
     ValidateKeyboardPaletteKeyBtnSize();
+
+    boardStrokeOnlySelection = new UBSetting(this, "Board", "StrokeOnlySelection", false);
+
+    boardGridSnapDivisor = new UBSetting(this, "Board", "GridSnapDivisor", 2);
 
     pageSize = new UBSetting(this, "Board", "DefaultPageSize", documentSizes.value(DocumentSizeRatio::Ratio4_3));
 
@@ -620,6 +626,18 @@ qreal UBSettings::currentPenWidth()
 }
 
 
+qreal UBSettings::penStrongWidth()
+{
+    return boardPenStrongWidth->get().toDouble();
+}
+
+
+void UBSettings::setPenStrongWidth(qreal width)
+{
+    boardPenStrongWidth->set(width);
+}
+
+
 int UBSettings::penColorIndex()
 {
     return value("Board/PenColorIndex", 0).toInt();
@@ -699,6 +717,18 @@ qreal UBSettings::currentMarkerWidth()
     }
 
     return width;
+}
+
+
+qreal UBSettings::markerStrongWidth()
+{
+    return boardMarkerStrongWidth->get().toDouble();
+}
+
+
+void UBSettings::setMarkerStrongWidth(qreal width)
+{
+    boardMarkerStrongWidth->set(width);
 }
 
 
@@ -1493,9 +1523,10 @@ void UBSettings::checkNewSettings()
      * Thus this method can be removed when it is no longer deemed useful.
      */
 
-    // OB 1.3 introduced an extra pen color;  for simplicity, if the old settings
-    // are still present (i.e only 4 selected pen colors), we just reset all color settings.
-    // Having too few colors actually causes OpenBoard to crash, hence these measures.
+    // OB 1.3 introduced an extra pen color, and slots 6-7 are now used for the
+    // two most recent custom colors. If an old settings file still contains
+    // fewer colors than the palette, reset all color settings: indexing past
+    // the end of these lists would crash OpenBoard.
 
     QList<UBColorListSetting*> colorSettings;
     colorSettings << boardPenDarkBackgroundSelectedColors
@@ -1504,7 +1535,7 @@ void UBSettings::checkNewSettings()
                   << boardMarkerLightBackgroundSelectedColors;
 
     foreach (UBColorListSetting* setting, colorSettings) {
-        if (setting->colors().size() < 5)
+        if (setting->colors().size() < colorPaletteSize)
             setting->reset();
     }
 

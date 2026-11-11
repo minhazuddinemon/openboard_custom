@@ -34,6 +34,7 @@
 
 #include "UBActionPalette.h"
 
+class UBActionPaletteButton;
 
 class UBStylusPalette : public UBActionPalette
 {
@@ -48,9 +49,18 @@ class UBStylusPalette : public UBActionPalette
     private slots:
 
         void stylusToolDoubleClicked();
+        void stylusToolChanged(int tool);
+        void strokeOnlySelectionToggled(bool enabled);
+        void strokeOnlySelectionSettingChanged(QVariant value);
 
     private:
+        void updateStrokeOnlySelectionButton(bool enabled);
+
         int mLastSelectedId;
+        QAction *mActionLasso;
+        QAction *mActionLaser;
+        QAction *mStrokeOnlySelectionAction;
+        UBActionPaletteButton *mStrokeOnlySelectionButton;
 
     signals:
         void stylusToolDoubleClicked(int tool);

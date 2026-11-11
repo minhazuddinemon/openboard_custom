@@ -29,13 +29,16 @@
 #define UBGRAPHICSSCENE_H_
 
 #include <QtGui>
+#include <QPointer>
 #include <optional>
+#include <utility>
 
 #include "frameworks/UBCoreGraphicsScene.h"
 
 #include "core/UB.h"
 
 #include "UBItem.h"
+#include "UBGraphicsLaserStroke.h"
 
 class UBGraphicsPixmapItem;
 class UBGraphicsSvgItem;
@@ -59,6 +62,8 @@ class UBGraphicsCache;
 class UBGraphicsGroupContainerItem;
 class UBSelectionFrame;
 class UBBoardView;
+class UBGraphicsLaserStroke;
+class QTimer;
 
 const double PI = 4.0 * atan(1.0);
 
@@ -143,6 +148,15 @@ class UBGraphicsScene: public UBCoreGraphicsScene, public UBItem, public std::en
         bool inputDeviceMove(const QPointF& scenePos, const qreal& pressure = 1.0, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
         bool inputDeviceRelease(int tool = -1, Qt::KeyboardModifiers modifiers = Qt::NoModifier);
 
+        // Used by UBBoardView to decide whether a lasso press must be forwarded
+        // natively to the graphics item framework (selection frame controls or
+        // selected items) instead of starting a new lasso path.
+        bool lassoShouldForwardPress(const QPointF& scenePos) const;
+
+        // Cursor to use while hovering in lasso mode: resize cursors over grips,
+        // pointing hand over frame buttons, crosshair over the canvas.
+        Qt::CursorShape lassoHoverCursor(const QPointF& scenePos) const;
+
         void leaveEvent (QEvent* event);
 
         void addItem(QGraphicsItem* item);
@@ -192,6 +206,7 @@ class UBGraphicsScene: public UBCoreGraphicsScene, public UBItem, public std::en
         void drawLineTo(const QPointF& pEndPoint, const qreal& pWidth, bool bLineStyle);
         void drawLineTo(const QPointF& pEndPoint, const qreal& pStartWidth, const qreal& endWidth, bool bLineStyle);
         void eraseLineTo(const QPointF& pEndPoint, const qreal& pWidth);
+        bool strokeEraseAt(const QPointF& scenePos);
         void drawArcTo(const QPointF& pCenterPoint, qreal pSpanAngle);
         void drawCurve(const QList<QPair<QPointF, qreal> > &points);
         void drawCurve(const QList<QPointF>& points, qreal startWidth, qreal endWidth);
@@ -247,6 +262,11 @@ class UBGraphicsScene: public UBCoreGraphicsScene, public UBItem, public std::en
         UBGraphicsCache* graphicsCache();
 
         bool isSnapping() const;
+
+        // Stroke-only selection filter (persisted in UBSettings).
+        bool isStrokeOnlySelection() const;
+        static bool isStrokeOnlySelectableItem(QGraphicsItem* item);
+
         QPointF snap(const QPointF& point, double* force = nullptr, std::optional<QPointF> proposedPoint = {}, QPointF* gridSnapPoint = nullptr) const;
         QPointF snap(const std::vector<QPointF>& corners, int* snapIndex = nullptr) const;
         QPointF snap(const QRectF& rect, Qt::Corner* corner = nullptr) const;
@@ -398,6 +418,8 @@ signals:
 
         void initPolygonItem(UBGraphicsPolygonItem*);
 
+        QGraphicsItem* strokeErasableItemFor(QGraphicsItem* item) const;
+
         void drawEraser(const QPointF& pEndPoint, bool pressed = true);
         void redrawEraser(bool pressed);
         void hideEraser();
@@ -434,13 +456,45 @@ signals:
         bool hasTextItemWithFocus(UBGraphicsGroupContainerItem* item);
         void simplifyCurrentStroke();
 
+        // Returns the z-value for a freshly created highlighter (Marker)
+        // stroke: just below the lowest pen stroke, above any non-stroke item
+        // that sits below that pen stroke, and above older highlighter
+        // strokes. Returns the group's current z when no pen stroke exists.
+        qreal zForNewMarkerStroke(const QGraphicsItem* markerStroke) const;
+
+        // Lasso selection helpers.
+        void startLasso(const QPointF& scenePos);
+        void updateLassoPath(const QPointF& scenePos);
+        void finishLasso();
+        void clearLassoPreview();
+        QList<QGraphicsItem*> lassoSelectionItems(const QPainterPath& path) const;
+
+        // Laser pointer helpers. Laser strokes are transient: they are added
+        // through QGraphicsScene directly so they never touch the document
+        // model, item count, undo stack or persistence.
+        void startLaserStroke(const QPointF& scenePos);
+        void updateLaserStroke(const QPointF& scenePos);
+        void finishLaserStroke();
+        void updateLaserStrokes();
+        void scheduleLaserCleanup();
+
         QGraphicsEllipseItem* mEraser;
         QGraphicsEllipseItem* mPointer; // "laser" pointer
         QGraphicsEllipseItem* mMarkerCircle; // dotted circle around marker
         QGraphicsEllipseItem* mPenCircle; // dotted circle around pen
 
+        QGraphicsPathItem* mLassoPathItem;
+        QPainterPath mLassoPath;
+
+        QTimer* mLaserTimer;
+        QList<QPointer<UBGraphicsLaserStroke>> mLaserStrokes;
+        QPointer<UBGraphicsLaserStroke> mCurrentLaserStroke;
+        qint64 mLaserIdleMs;
+        bool mLaserCleanupScheduled;
+
         QSet<QGraphicsItem*> mAddedItems;
         QSet<QGraphicsItem*> mRemovedItems;
+        QMultiMap<UBGraphicsGroupContainerItem*, QUuid> mStrokeEraseGroups;
 
         std::shared_ptr<UBDocumentProxy> mDocument;
 

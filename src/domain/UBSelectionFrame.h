@@ -36,13 +36,15 @@
 
 class DelegateButton;
 class UBGraphicsItemDelegate;
+class QGraphicsSvgItem;
+class QGraphicsRectItem;
 
 class UBSelectionFrame : public QObject, public QGraphicsRectItem
 {
     Q_OBJECT
 
 public:
-    enum {om_idle, om_moving, om_rotating} mOperationMode;
+    enum {om_idle, om_moving, om_rotating, om_scaling} mOperationMode;
     enum { Type = UBGraphicsItemType::SelectionFrameType };
 
     UBSelectionFrame();
@@ -57,6 +59,7 @@ public:
     void setEnclosedItems(const QList<QGraphicsItem*> pGraphicsItems);
     void updateRect();
     void updateScale();
+    Qt::CursorShape hoverCursor(const QPointF &scenePos) const;
     bool isEmpty() const {return this->rect().isEmpty();}
     virtual int type() const {return Type;}
 
@@ -75,16 +78,24 @@ private slots:
     void increaseZlevelDown();
     void increaseZlevelBottom();
     void groupItems();
+    void showStrokeColorMenu();
 
 private:
     void addSelectionUndo(QList<QGraphicsItem*> items, UBZLayerController::moveDestination dest);
     void translateItem(QGraphicsItem *item, const QPointF &translatePoint);
     void placeButtons();
     void placeExceptionButton(DelegateButton *pButton, QTransform pTransform);
+    void placeResizeGrips();
+    void applyStrokeColor(const QColor &color);
     void clearButtons();
     inline int adjThickness() const {return mThickness * mAntiscaleRatio;}
     inline std::shared_ptr<UBGraphicsScene> ubscene();
     void setCursorFromAngle(QString angle);
+
+    enum ScaleTool { NoScale, ScaleTop, ScaleBottom, ScaleLeft, ScaleRight, ScaleBottomRight };
+    ScaleTool scaleToolFromPos(const QPointF &scenePos) const;
+    void beginGroupScale(const QPointF &scenePos);
+    void applyGroupScale(const QPointF &scenePos);
 
     QList<QGraphicsItem*> sortedByZ(const QList<QGraphicsItem*> &pItems);
     QList<DelegateButton*> buttonsForFlags(UBGraphicsFlags fls);
@@ -105,6 +116,11 @@ private:
     qreal mCursorRotationAngle;
     qreal mItemRotationAngle;
 
+    ScaleTool mCurrentScaleTool;
+    QRectF mScalingStartBounds;
+    QHash<QGraphicsItem*, QTransform> mScalingInitialTransforms;
+    QHash<QGraphicsItem*, QTransform> mScalingInitialParentSceneTransforms;
+
     bool mIsLocked;
 
     QList<DelegateButton*> mButtons;
@@ -114,8 +130,21 @@ private:
     DelegateButton *mZOrderUpButton;
     DelegateButton *mZOrderDownButton;
     DelegateButton *mGroupButton;
+    DelegateButton *mChangeColorButton;
 
     DelegateButton *mRotateButton;
+
+    QGraphicsSvgItem *mBottomRightResizeGripSvgItem;
+    QGraphicsSvgItem *mBottomResizeGripSvgItem;
+    QGraphicsSvgItem *mLeftResizeGripSvgItem;
+    QGraphicsSvgItem *mRightResizeGripSvgItem;
+    QGraphicsSvgItem *mTopResizeGripSvgItem;
+
+    QGraphicsRectItem *mBottomRightResizeGrip;
+    QGraphicsRectItem *mBottomResizeGrip;
+    QGraphicsRectItem *mLeftResizeGrip;
+    QGraphicsRectItem *mRightResizeGrip;
+    QGraphicsRectItem *mTopResizeGrip;
 
 };
 

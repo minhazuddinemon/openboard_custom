@@ -1,7 +1,15 @@
 TARGET = "OpenBoard"
 TEMPLATE = app
 
-CONFIG += c++17
+# C++20 is required by modern Poppler headers (std::span, concepts, ...).
+# Qt 5.15 does not know "c++20"; its pre-standard alias is "c++2a".
+greaterThan(QT_MAJOR_VERSION, 5) {
+    CONFIG += c++20
+} else {
+    CONFIG += c++2a
+}
+# Drop any older standard requested elsewhere in the project/sub-projects.
+CONFIG -= c++98 c++11 c++14 c++17 c++1z
 CONFIG -= flat
 CONFIG += debug_and_release \
           no_include_pwd
@@ -175,7 +183,7 @@ macx {
 
    LIBS += -L/usr/local/lib -lquazip1-qt6.1.4
    INCLUDEPATH += /opt/local/include/QuaZip-Qt6-1.4/quazip
-   
+
    LIBS += -L/opt/local/lib
    INCLUDEPATH += /usr/local/opt/openssl/include
    INCLUDEPATH += /opt/local/include
@@ -533,3 +541,33 @@ DISTFILES += \
     resources/images/moveDown.svg \
     resources/images/moveDownDisabled.svg
 
+INCLUDEPATH += /usr/include/ffmpeg
+
+# ---------------------------------------------------------------------------
+# Force C++20 on every compiler invocation.
+#
+# qmake 5.15 appends the CONFIG-derived -std flag (-std=gnu++2a) in
+# default_post.prf, i.e. *after* this file is parsed. Legacy flags such as
+# -std=c++11 (src/podcast/podcast.pri) or -std=gnu++1z must therefore be
+# stripped here, and the C++20 flag must be the one qmake adds last. GCC
+# honours the right-most -std= option. Overriding the mkspec variables also
+# makes qmake emit the modern spelling instead of the deprecated c++2a one.
+# ---------------------------------------------------------------------------
+QMAKE_CXXFLAGS_CXX2A    = -std=gnu++20
+QMAKE_CXXFLAGS_GNUCXX2A = -std=gnu++20
+
+LEGACY_CXX_STD_FLAGS = -std=c++98 -std=gnu++98 \
+                       -std=c++11 -std=gnu++11 \
+                       -std=c++14 -std=gnu++14 \
+                       -std=c++17 -std=gnu++17 \
+                       -std=c++1z  -std=gnu++1z
+QMAKE_CXXFLAGS         -= $$LEGACY_CXX_STD_FLAGS
+QMAKE_CXXFLAGS_RELEASE -= $$LEGACY_CXX_STD_FLAGS
+QMAKE_CXXFLAGS_DEBUG   -= $$LEGACY_CXX_STD_FLAGS
+
+# Qt 6 knows CONFIG+=c++20 but Qt 5.15 only knows c++2a, so for the Qt 5
+# branch the flag added by default_post.prf comes from the overridden
+# QMAKE_CXXFLAGS_GNUCXX2A variable above. Explicitly cover Qt 6 as well.
+greaterThan(QT_MAJOR_VERSION, 5) {
+    QMAKE_CXXFLAGS += -std=gnu++20
+}

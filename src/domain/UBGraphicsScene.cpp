@@ -33,6 +33,7 @@
 #include <QtSvg>
 #include <QGraphicsView>
 #include <QGraphicsVideoItem>
+#include <QTimer>
 
 #include "frameworks/UBGeometryUtils.h"
 
@@ -66,6 +67,7 @@
 #include "UBGraphicsPixmapItem.h"
 #include "UBGraphicsSvgItem.h"
 #include "UBGraphicsPolygonItem.h"
+#include "UBGraphicsLaserStroke.h"
 #include "UBGraphicsMediaItem.h"
 #include "UBGraphicsWidgetItem.h"
 #include "UBGraphicsPDFItem.h"
@@ -319,6 +321,10 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mPointer(0)
     , mMarkerCircle(0)
     , mPenCircle(0)
+    , mLassoPathItem(0)
+    , mLaserTimer(0)
+    , mLaserIdleMs(0)
+    , mLaserCleanupScheduled(false)
     , mDocument(document)
     , mDarkBackground(false)
     , mPageBackground(UBPageBackground::plain)
@@ -372,6 +378,17 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
 
 UBGraphicsScene::~UBGraphicsScene()
 {
+    clearLassoPreview();
+
+    if (mLaserTimer)
+    {
+        mLaserTimer->stop();
+        mLaserTimer = 0;
+    }
+    mLaserStrokes.clear();
+    mCurrentLaserStroke.clear();
+    mLaserCleanupScheduled = false;
+
     // disconnect all consumers of this signal at once to speed-up deletion of scene
     disconnect(this, &UBGraphicsScene::zoomChanged, nullptr, nullptr);
 
@@ -408,6 +425,7 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
     }
     else {
         mInputDeviceIsPressed = true;
+        mStrokeEraseGroups.clear();
 
         UBStylusTool::Enum currentTool = (UBStylusTool::Enum)UBDrawingController::drawingController()->stylusTool();
 
@@ -483,8 +501,28 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
 
             accepted = true;
         }
+        else if (currentTool == UBStylusTool::StrokeEraser) {
+            mAddedItems.clear();
+            mRemovedItems.clear();
+
+            strokeEraseAt(scenePos);
+            accepted = true;
+        }
+        else if (currentTool == UBStylusTool::Lasso) {
+            // UBBoardView only calls this for empty/unselected areas. Presses on
+            // selection controls are forwarded natively by the view.
+            deselectAllItems();
+            startLasso(scenePos);
+            accepted = true;
+        }
         else if (currentTool == UBStylusTool::Pointer) {
             drawPointer(scenePos, true);
+            accepted = true;
+        }
+        else if (currentTool == UBStylusTool::Laser) {
+            mAddedItems.clear();
+            mRemovedItems.clear();
+            startLaserStroke(scenePos);
             accepted = true;
         }
     }
@@ -510,6 +548,26 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
     if (currentTool == UBStylusTool::Eraser)
     {
         drawEraser(position, mInputDeviceIsPressed);
+        accepted = true;
+    }
+
+    else if (currentTool == UBStylusTool::StrokeEraser)
+    {
+        // The precise dot cursor is managed by UBBoardView; no scene preview.
+        accepted = true;
+    }
+
+    else if (currentTool == UBStylusTool::Lasso)
+    {
+        if (mInputDeviceIsPressed)
+            updateLassoPath(position);
+        accepted = true;
+    }
+
+    else if (currentTool == UBStylusTool::Laser)
+    {
+        if (mInputDeviceIsPressed)
+            updateLaserStroke(position);
         accepted = true;
     }
 
@@ -675,6 +733,10 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
 
             eraseLineTo(position, eraserWidth);
         }
+        else if (currentTool == UBStylusTool::StrokeEraser)
+        {
+            strokeEraseAt(position);
+        }
         else if (currentTool == UBStylusTool::Pointer)
         {
             drawPointer(position);
@@ -703,6 +765,19 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
 
     UBStylusTool::Enum currentTool = (UBStylusTool::Enum)tool;
     UBDrawingController *dc = UBDrawingController::drawingController();
+
+    if (currentTool == UBStylusTool::Lasso) {
+        finishLasso();
+        accepted = true;
+    }
+    else if (mLassoPathItem) {
+        clearLassoPreview();
+    }
+
+    if (currentTool == UBStylusTool::Laser) {
+        finishLaserStroke();
+        accepted = true;
+    }
 
     if (dc->isDrawingTool(tool) || mDrawWithCompass)
     {
@@ -767,6 +842,14 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
             mAddedItems << pStrokes;
             addItem(pStrokes);
 
+            if (currentTool == UBStylusTool::Marker)
+            {
+                // Highlighters must sit underneath pen ink, but must not drop
+                // below images or other objects that are already below the
+                // pen strokes. Applied once at creation only.
+                UBGraphicsItem::assignZValue(pStrokes, zForNewMarkerStroke(pStrokes));
+            }
+
             if (mCurrentStroke->polygons().empty()){
                 delete mCurrentStroke;
                 mCurrentStroke = 0;
@@ -780,13 +863,14 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
         if (mUndoRedoStackEnabled) { //should be deleted after scene own undo stack implemented
             if (UBApplication::undoStack)
             {
-                UBGraphicsItemUndoCommand* udcmd = new UBGraphicsItemUndoCommand(shared_from_this(), mRemovedItems, mAddedItems); //deleted by the undoStack
+                UBGraphicsItemUndoCommand* udcmd = new UBGraphicsItemUndoCommand(shared_from_this(), mRemovedItems, mAddedItems, mStrokeEraseGroups); //deleted by the undoStack
                 UBApplication::undoStack->push(udcmd);
             }
         }
 
         mRemovedItems.clear();
         mAddedItems.clear();
+        mStrokeEraseGroups.clear();
         accepted = true;
     }
 
@@ -801,6 +885,403 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     mCurrentStroke = NULL;
     return accepted;
 }
+
+
+bool UBGraphicsScene::lassoShouldForwardPress(const QPointF& scenePos) const
+{
+    QGraphicsItem *touchedItem = itemAt(scenePos, QTransform());
+    if (!touchedItem)
+        return false;
+
+    // Walk up the parent chain. This catches resize grips and buttons that
+    // are children of the selection frame or of an item's delegate frame,
+    // as well as children of a selected group container.
+    for (QGraphicsItem *item = touchedItem; item; item = item->parentItem()) {
+        if (item->type() == UBSelectionFrame::Type
+                || item->data(UBGraphicsItemData::ItemLayerType).toInt() == UBItemLayerType::Control
+                || item->isSelected())
+            return true;
+    }
+
+    return false;
+}
+
+Qt::CursorShape UBGraphicsScene::lassoHoverCursor(const QPointF& scenePos) const
+{
+    if (mSelectionFrame && mSelectionFrame->isVisible())
+        return mSelectionFrame->hoverCursor(scenePos);
+
+    return Qt::CrossCursor;
+}
+
+void UBGraphicsScene::clearLassoPreview()
+{
+    if (mLassoPathItem) {
+        // Use QGraphicsScene directly: the preview is not a document item and
+        // must not affect the scene's item count or deletion tracking.
+        QGraphicsScene::removeItem(mLassoPathItem);
+        delete mLassoPathItem;
+        mLassoPathItem = 0;
+    }
+    mLassoPath = QPainterPath();
+}
+
+void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
+{
+    // Drawing again cancels any pending hold/fade: all previous laser strokes
+    // become fully visible again and new points are appended to the same view.
+    mLaserIdleMs = 0;
+
+    for (int i = mLaserStrokes.size() - 1; i >= 0; --i)
+    {
+        UBGraphicsLaserStroke* previous = mLaserStrokes.at(i);
+        if (!previous)
+        {
+            mLaserStrokes.removeAt(i);
+            continue;
+        }
+
+        previous->setOpacity(1.0);
+    }
+
+    QColor color = UBDrawingController::drawingController()->laserColor();
+    if (!color.isValid())
+        color = QColor(Qt::red);
+
+    // Convert the requested screen-space widths to scene units so the laser
+    // keeps a constant thickness at the current zoom. The core stays sleek
+    // (~4 px) and the halo hugs it closely (core + ~9 px).
+    qreal scale = UBApplication::boardController->systemScaleFactor()
+            * UBApplication::boardController->currentZoom();
+    if (scale <= 0.0)
+        scale = 1.0;
+
+    const qreal innerWidth = 4.0 / scale;
+    const qreal outerWidth = innerWidth + 9.0 / scale;
+
+    UBGraphicsLaserStroke* stroke =
+            new UBGraphicsLaserStroke(color, outerWidth, innerWidth);
+    stroke->appendPoint(scenePos);
+
+    // Bypass UBGraphicsScene::addItem on purpose: this is a transient tool
+    // effect, not a document item, and must not affect history or the page.
+    QGraphicsScene::addItem(stroke);
+
+    mCurrentLaserStroke = stroke;
+    mLaserStrokes.append(stroke);
+
+    if (!mLaserTimer)
+    {
+        mLaserTimer = new QTimer(this);
+        mLaserTimer->setTimerType(Qt::PreciseTimer);
+        connect(mLaserTimer, &QTimer::timeout, this, &UBGraphicsScene::updateLaserStrokes);
+    }
+
+    if (!mLaserTimer->isActive())
+        mLaserTimer->start(16); // ~60 FPS
+}
+
+void UBGraphicsScene::updateLaserStroke(const QPointF& scenePos)
+{
+    if (mCurrentLaserStroke)
+        mCurrentLaserStroke->appendPoint(scenePos);
+}
+
+void UBGraphicsScene::finishLaserStroke()
+{
+    // Stylus lifted: start the inactivity hold. The fade is driven by
+    // updateLaserStrokes() once neither input nor a live gesture is active.
+    mCurrentLaserStroke.clear();
+    mLaserIdleMs = 0;
+}
+
+void UBGraphicsScene::updateLaserStrokes()
+{
+    constexpr qint64 tickMs = 16;
+    constexpr qint64 holdMs = 1200;
+    constexpr qint64 fadeMs = 600;
+
+    if (mLaserStrokes.isEmpty())
+    {
+        if (mLaserTimer)
+            mLaserTimer->stop();
+        return;
+    }
+
+    // Active input guard: never fade or delete items while the user is
+    // drawing (with the laser or any other tool). This prevents deleting an
+    // item that is still referenced by an in-flight input event.
+    if (mInputDeviceIsPressed || mCurrentLaserStroke)
+    {
+        mLaserIdleMs = 0;
+        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+            if (stroke)
+                stroke->setOpacity(1.0);
+        }
+        return;
+    }
+
+    mLaserIdleMs += tickMs;
+
+    if (mLaserIdleMs <= holdMs)
+    {
+        // Hold at full opacity.
+        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+            if (stroke)
+                stroke->setOpacity(1.0);
+        }
+        return;
+    }
+
+    const qreal progress = qreal(mLaserIdleMs - holdMs) / qreal(fadeMs);
+
+    if (progress >= 1.0)
+    {
+        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+            if (stroke)
+                stroke->setOpacity(0.0);
+        }
+        scheduleLaserCleanup();
+        return;
+    }
+
+    const qreal opacity = 1.0 - progress;
+    foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+        if (stroke)
+            stroke->setOpacity(opacity);
+    }
+}
+
+void UBGraphicsScene::scheduleLaserCleanup()
+{
+    if (mLaserCleanupScheduled)
+        return;
+
+    // Safety: never schedule deletion while input is active.
+    if (mInputDeviceIsPressed || mCurrentLaserStroke)
+        return;
+
+    mLaserCleanupScheduled = true;
+
+    if (mLaserTimer)
+        mLaserTimer->stop();
+
+    // Deleting synchronously from an input/timer callback can leave dangling
+    // pointers in the event pipeline. Defer the cleanup to the next event-loop
+    // iteration and use deleteLater() on the (QObject-based) laser items.
+    QTimer::singleShot(0, this, [this]() {
+        mLaserCleanupScheduled = false;
+
+        if (mInputDeviceIsPressed || mCurrentLaserStroke)
+        {
+            // Drawing resumed: cancel the cleanup and restore visibility.
+            mLaserIdleMs = 0;
+            foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+                if (stroke)
+                    stroke->setOpacity(1.0);
+            }
+            if (mLaserTimer && !mLaserTimer->isActive())
+                mLaserTimer->start(16);
+            return;
+        }
+
+        const QList<QPointer<UBGraphicsLaserStroke>> strokes = mLaserStrokes;
+        mLaserStrokes.clear();
+
+        foreach (UBGraphicsLaserStroke* stroke, strokes) {
+            if (!stroke)
+                continue;
+
+            if (stroke->scene() == this)
+                QGraphicsScene::removeItem(stroke);
+
+            stroke->deleteLater();
+        }
+    });
+}
+
+void UBGraphicsScene::startLasso(const QPointF& scenePos)
+{
+    clearLassoPreview();
+
+    mLassoPath = QPainterPath(scenePos);
+
+    QPen pen(isDarkBackground() ? QColor(120, 200, 255) : QColor(0, 90, 200),
+             1.5, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
+    pen.setCosmetic(true); // keep the preview about 1.5 px regardless of zoom
+
+    mLassoPathItem = new QGraphicsPathItem();
+    mLassoPathItem->setPen(pen);
+    mLassoPathItem->setBrush(Qt::NoBrush);
+    mLassoPathItem->setAcceptedMouseButtons(Qt::NoButton);
+    mLassoPathItem->setZValue(1e6);
+    QGraphicsScene::addItem(mLassoPathItem);
+}
+
+void UBGraphicsScene::updateLassoPath(const QPointF& scenePos)
+{
+    if (!mLassoPathItem)
+        return;
+
+    mLassoPath.lineTo(scenePos);
+    mLassoPathItem->setPath(mLassoPath);
+}
+
+QList<QGraphicsItem*> UBGraphicsScene::lassoSelectionItems(const QPainterPath& path) const
+{
+    QList<QGraphicsItem*> result;
+    QSet<QGraphicsItem*> seen;
+
+    const bool strokeOnly = isStrokeOnlySelection();
+
+    foreach (QGraphicsItem *candidate, items(path, Qt::IntersectsItemShape)) {
+        QGraphicsItem *item = candidate;
+        if (!item || item == mBackgroundObject)
+            continue;
+
+        // Polygon children belong to their stroke group.
+        if (item->type() == UBGraphicsItemType::PolygonItemType && item->parentItem())
+            item = item->parentItem();
+
+        const int itemType = item->type();
+        const bool selectableType =
+                itemType == UBGraphicsW3CWidgetItem::Type
+                || itemType == UBGraphicsPixmapItem::Type
+                || itemType == UBGraphicsVideoItem::Type
+                || itemType == UBGraphicsAudioItem::Type
+                || itemType == UBGraphicsSvgItem::Type
+                || itemType == UBGraphicsTextItem::Type
+                || itemType == UBGraphicsStrokesGroup::Type
+                || itemType == UBGraphicsGroupContainerItem::Type
+                || itemType == UBGraphicsPolygonItem::Type;
+
+        if (!selectableType)
+            continue;
+
+        if (strokeOnly && !isStrokeOnlySelectableItem(item))
+            continue;
+
+        if (!seen.contains(item)) {
+            seen.insert(item);
+            result << item;
+        }
+    }
+
+    return result;
+}
+
+void UBGraphicsScene::finishLasso()
+{
+    if (!mLassoPathItem)
+        return;
+
+    QPainterPath path = mLassoPath;
+    path.closeSubpath();
+
+    clearLassoPreview();
+
+    const QList<QGraphicsItem*> matched = lassoSelectionItems(path);
+
+    deselectAllItems();
+
+    foreach (QGraphicsItem *item, matched) {
+        if (item->flags() & QGraphicsItem::ItemIsSelectable)
+            item->setSelected(true);
+    }
+
+    // Immediately refresh the multi-selection frame with all its controls.
+    updateSelectionFrame();
+}
+
+
+QGraphicsItem* UBGraphicsScene::strokeErasableItemFor(QGraphicsItem* item) const
+{
+    if (!item || item == mBackgroundObject)
+        return nullptr;
+
+    // Polygon children belong to a vector stroke group; erase the whole group.
+    if (item->type() == UBGraphicsPolygonItem::Type && item->parentItem())
+        item = item->parentItem();
+
+    while (item->parentItem() && item->parentItem()->type() == UBGraphicsStrokesGroup::Type)
+        item = item->parentItem();
+
+    switch (item->type())
+    {
+    case UBGraphicsStrokesGroup::Type:
+    case UBGraphicsPolygonItem::Type:
+    case UBGraphicsTextItem::Type:
+    case UBGraphicsSvgItem::Type:
+    case UBGraphicsPixmapItem::Type:
+        break;
+    default:
+        return nullptr;
+    }
+
+    if (item->data(UBGraphicsItemData::ItemLocked).toBool())
+        return nullptr;
+
+    return item;
+}
+
+
+bool UBGraphicsScene::strokeEraseAt(const QPointF& scenePos)
+{
+    // The hit target is the small on-screen cursor dot (about 10 px), converted
+    // to scene coordinates so it stays visually constant while zooming.
+    qreal hitSize = 10.0;
+    if (UBApplication::boardController)
+    {
+        const qreal viewScale = UBApplication::boardController->systemScaleFactor()
+                * UBApplication::boardController->currentZoom();
+
+        if (viewScale > 0.0)
+            hitSize /= viewScale;
+    }
+
+    const QRectF targetRect(scenePos.x() - hitSize / 2.0,
+                            scenePos.y() - hitSize / 2.0,
+                            hitSize, hitSize);
+
+    // BspTreeIndex-backed spatial query: only items near the cursor are visited.
+    const QList<QGraphicsItem*> candidates =
+            items(targetRect, Qt::IntersectsItemBoundingRect);
+
+    bool removedAny = false;
+
+    for (QGraphicsItem* candidate : candidates)
+    {
+        QGraphicsItem* item = strokeErasableItemFor(candidate);
+        if (!item)
+            continue;
+
+        if (mRemovedItems.contains(item) || item->scene() != this)
+            continue;
+
+        // Preserve group membership so the undo command can restore it.
+        if (item->parentItem()
+                && item->parentItem()->type() == UBGraphicsGroupContainerItem::Type)
+        {
+            UBGraphicsGroupContainerItem* group =
+                    static_cast<UBGraphicsGroupContainerItem*>(item->parentItem());
+            const QTransform sceneTransform = item->sceneTransform();
+
+            mStrokeEraseGroups.insert(group, UBGraphicsItem::getOwnUuid(item));
+            group->removeFromGroup(item);
+            item->setTransform(sceneTransform);
+        }
+
+        mRemovedItems.insert(item);
+        removeItem(item);
+        removedAny = true;
+    }
+
+    if (removedAny)
+        setDocumentUpdated();
+
+    return removedAny;
+}
+
 
 void UBGraphicsScene::drawEraser(const QPointF &pPoint, bool pressed)
 {
@@ -1289,6 +1770,87 @@ void UBGraphicsScene::initPolygonItem(UBGraphicsPolygonItem* polygonItem)
     polygonItem->setData(UBGraphicsItemData::ItemLayerType, QVariant(UBItemLayerType::Graphic));
 }
 
+qreal UBGraphicsScene::zForNewMarkerStroke(const QGraphicsItem* markerStroke) const
+{
+    // A highlighter stroke is a stroke group whose ink is semi-transparent
+    // (pen/line ink is opaque). This also works for strokes reloaded from a
+    // saved document.
+    auto isHighlighterGroup = [](QGraphicsItem* item) -> bool {
+        UBGraphicsStrokesGroup* group = qgraphicsitem_cast<UBGraphicsStrokesGroup*>(item);
+        if (!group)
+            return false;
+
+        const auto children = group->childItems();
+        for (QGraphicsItem* child : children) {
+            UBGraphicsPolygonItem* polygon = qgraphicsitem_cast<UBGraphicsPolygonItem*>(child);
+            if (polygon)
+                return polygon->color().alphaF() < 1.0;
+        }
+        return false;
+    };
+
+    const auto sceneItems = items();
+
+    qreal lowestPenZ = 0.0;
+    bool hasPen = false;
+    qreal highestHighlighterZ = 0.0;
+    bool hasHighlighter = false;
+
+    for (QGraphicsItem* item : sceneItems) {
+        if (!item || item == markerStroke || item->parentItem())
+            continue;
+
+        if (item->type() != UBGraphicsStrokesGroup::Type)
+            continue;
+
+        if (isHighlighterGroup(item)) {
+            if (!hasHighlighter || item->zValue() > highestHighlighterZ) {
+                highestHighlighterZ = item->zValue();
+                hasHighlighter = true;
+            }
+        }
+        else if (!hasPen || item->zValue() < lowestPenZ) {
+            lowestPenZ = item->zValue();
+            hasPen = true;
+        }
+    }
+
+    // No pen ink on the page: keep the normal, freshly assigned z-value.
+    if (!hasPen)
+        return markerStroke->zValue();
+
+    // Highest non-stroke item that already sits below the lowest pen stroke.
+    qreal lowerBound = 0.0;
+    bool hasLowerBound = false;
+
+    for (QGraphicsItem* item : sceneItems) {
+        if (!item || item == markerStroke || item->parentItem())
+            continue;
+        if (item->type() == UBGraphicsStrokesGroup::Type)
+            continue;
+
+        const qreal z = item->zValue();
+        if (z < lowestPenZ && (!hasLowerBound || z > lowerBound)) {
+            lowerBound = z;
+            hasLowerBound = true;
+        }
+    }
+
+    // "Just below" the lowest pen stroke. With the default z step of 1 this
+    // leaves half a step of room.
+    qreal targetZ = lowestPenZ - 0.5;
+
+    // Stay above older highlighter strokes when there is room below the pen.
+    if (hasHighlighter && highestHighlighterZ < lowestPenZ && targetZ <= highestHighlighterZ)
+        targetZ = (highestHighlighterZ + lowestPenZ) / 2.0;
+
+    // Never drop below an object that is already below the pen strokes.
+    if (hasLowerBound && targetZ <= lowerBound)
+        targetZ = (lowerBound + lowestPenZ) / 2.0;
+
+    return targetZ;
+}
+
 UBGraphicsPolygonItem* UBGraphicsScene::arcToPolygonItem(const QLineF& pStartRadius, qreal pSpanAngle, qreal pWidth)
 {
     QPolygonF polygon = UBGeometryUtils::arcToPolygon(pStartRadius, pSpanAngle, pWidth);
@@ -1351,17 +1913,25 @@ void UBGraphicsScene::updateSelectionFrame()
         mSelectionFrame->setEnclosedItems(selItems);
     } break;
     case 1: {
-        mSelectionFrame->setVisible(false);
-        mSelectionFrame->setEnclosedItems(QList<QGraphicsItem*>());
+        QGraphicsItem *singleItem = selItems.first();
+        UBGraphicsItemDelegate *itemDelegate = UBGraphicsItem::Delegate(singleItem);
 
-        UBGraphicsItemDelegate *itemDelegate = UBGraphicsItem::Delegate(selItems.first());
-        if (itemDelegate)
-        {
-            itemDelegate->createControls();
-            selItems.first()->setVisible(true);
-            itemDelegate->showControls();
+        // Stroke items use the selection frame even when selected alone, so
+        // that the resize grips and the stroke-color button remain available.
+        if (itemDelegate && isStrokeOnlySelectableItem(singleItem)) {
+            mSelectionFrame->setVisible(true);
+            mSelectionFrame->setEnclosedItems(selItems);
+        } else {
+            mSelectionFrame->setVisible(false);
+            mSelectionFrame->setEnclosedItems(QList<QGraphicsItem*>());
+
+            if (itemDelegate)
+            {
+                itemDelegate->createControls();
+                singleItem->setVisible(true);
+                itemDelegate->showControls();
+            }
         }
-
     } break;
     default: {
         mSelectionFrame->setVisible(true);
@@ -1477,6 +2047,8 @@ UBItem* UBGraphicsScene::deepCopy() const
 
 void UBGraphicsScene::clearContent(clearCase pCase)
 {
+    clearLassoPreview();
+
     QSet<QGraphicsItem*> removedItems;
     UBGraphicsItemUndoCommand::GroupDataTable groupsMap;
 
@@ -2444,6 +3016,9 @@ void UBGraphicsScene::stylusToolChanged(int tool, int previousTool)
         {
             inputDeviceMove(mCurrentPoint);
         }
+
+        if (tool != UBStylusTool::Lasso)
+            clearLassoPreview();
     }
 }
 
@@ -2506,6 +3081,21 @@ bool UBGraphicsScene::isSnapping() const
     return UBApplication::mainWindow->actionSnap->isChecked();
 }
 
+bool UBGraphicsScene::isStrokeOnlySelection() const
+{
+    return UBSettings::settings()->boardStrokeOnlySelection->get().toBool();
+}
+
+bool UBGraphicsScene::isStrokeOnlySelectableItem(QGraphicsItem* item)
+{
+    if (!item)
+        return false;
+
+    const int itemType = item->type();
+    return itemType == UBGraphicsStrokesGroup::Type
+        || itemType == UBGraphicsPolygonItem::Type;
+}
+
 QPointF UBGraphicsScene::snap(const QPointF& point, double* force, std::optional<QPointF> proposedPoint, QPointF* gridSnapPoint) const
 {
     QPointF snapPoint{point};
@@ -2515,6 +3105,15 @@ QPointF UBGraphicsScene::snap(const QPointF& point, double* force, std::optional
     if (mIntermediateLines)
     {
         gridSize /= 2.;
+    }
+
+    // Allow a finer snapping step than the drawn grid. The divisor is exposed
+    // in UBSettings so the magnet resolution can be tuned without changing the
+    // visual background grid.
+    const int snapDivisor = UBSettings::settings()->boardGridSnapDivisor->get().toInt();
+    if (snapDivisor > 1)
+    {
+        gridSize /= snapDivisor;
     }
 
     // y axis
@@ -3302,6 +3901,12 @@ void UBGraphicsScene::setToolCursor(int tool)
             tool == (int)UBStylusTool::Text ||
             tool == (int)UBStylusTool::Play) {
         deselectAllItems();
+        hideMarkerCircle();
+        hidePenCircle();
+    }
+
+    if (tool == (int)UBStylusTool::StrokeEraser) {
+        hideEraser();
         hideMarkerCircle();
         hidePenCircle();
     }

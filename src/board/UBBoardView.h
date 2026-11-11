@@ -34,6 +34,7 @@
 #include <QtGui>
 #include <QGraphicsView>
 #include <QRubberBand>
+#include <QPointer>
 
 #include "core/UB.h"
 #include "domain/UBGraphicsDelegateFrame.h"
@@ -137,6 +138,10 @@ private:
 
     QList<QUrl> processMimeData(const QMimeData* pMimeData);
 
+    // Updates the viewport cursor for hover (mouse or tablet pen) over the
+    // selection frame controls or the canvas.
+    void updateHoverCursor(const QPointF& scenePos, int tool);
+
     UBBoardController* mController;
 
     int mStartLayer, mEndLayer;
@@ -159,6 +164,10 @@ private:
     bool mIsCreatingTextZone;
     bool mIsCreatingSceneGrabZone;
 
+    // Lasso: true while pressed on the selection frame / a selected item, in
+    // which case mouse events are forwarded natively through QGraphicsView.
+    bool mLassoForwardingToItems;
+
     bool isAbsurdPoint(QPoint point);
 
     bool mVirtualKeyboardActive;
@@ -172,25 +181,38 @@ private:
     /* when an item is moved around, the tracking must stop if the object is deleted */
     QGraphicsItem *_movingItem;
 
+    // QPointer keeps track of QObject-based items (e.g. the transient laser
+    // strokes) so getMovingItem() never returns a pointer that was deleted
+    // asynchronously while an input event was in flight.
+    QPointer<QObject> _movingItemObject;
+    bool _movingItemIsQObject;
+
     QGraphicsItem *getMovingItem() {
+        if (_movingItemIsQObject && _movingItemObject.isNull())
+            _movingItem = nullptr;
+
         return _movingItem;
     }
 
     void setMovingItem(QGraphicsItem *item) {
-        // if the current moving item is a qobject, it MUST be disconnected
-        if (_movingItem) {
-            QObject *moving_item_obj = dynamic_cast<QObject*>(_movingItem);
-            if (moving_item_obj != nullptr)
-                disconnect(moving_item_obj, &QObject::destroyed, this, &UBBoardView::movingItemDestroyed);
-        }
+        // Disconnect the previous moving item without dereferencing it: it
+        // may already have been destroyed asynchronously.
+        if (_movingItemObject)
+            disconnect(_movingItemObject, &QObject::destroyed, this, &UBBoardView::movingItemDestroyed);
+
+        _movingItemObject = nullptr;
+        _movingItemIsQObject = false;
+        _movingItem = item;
 
         // attach the new moving item if relevant
         if (item) {
             QObject *item_obj = dynamic_cast<QObject*>(item);
-            if (item_obj != nullptr)
+            if (item_obj != nullptr) {
+                _movingItemObject = item_obj;
+                _movingItemIsQObject = true;
                 connect(item_obj, &QObject::destroyed, this, &UBBoardView::movingItemDestroyed);
+            }
         }
-        _movingItem = item;
     }
 
     QMouseEvent *suspendedMousePressEvent;

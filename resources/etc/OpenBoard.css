@@ -93,7 +93,7 @@ QToolBar QToolButton
     margin-right: 0px;
     padding: 0px;
     border: none;
-    height: 58px;
+    height: 36px;
 }
 
 QToolBar QToolButton:pressed
@@ -103,7 +103,7 @@ QToolBar QToolButton:pressed
     margin-right: 0px;
     padding: 0px;
     border: none;
-    height: 58px;
+    height: 36px;
 
     background: qradialgradient(cx:0.5, cy:0.5, radius: 0.5,
                  fx:0.5, fy:0.5, stop: 0 #d3d3d3, stop: 1  #b3b3b3);
@@ -253,6 +253,17 @@ QFrame#toolFrame
 QTreeView
 {
     background-color: rgb(209, 215, 226);
+}
+
+QTreeView#UBDocumentTreeView
+{
+    background-color: #e6e6e6;
+    color: #222222;
+}
+
+QTreeView#UBDocumentTreeView::item:selected
+{
+    color: #FFFFFF;
 }
 
 QTreeView::item:selected:active

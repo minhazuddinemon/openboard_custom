@@ -64,6 +64,7 @@ class UBToolbarButtonGroup : public QWidget
 
     public slots:
         void setCurrentIndex(int index);
+        void clearSelection();
         void colorPaletteChanged();
         void displayText(QVariant display);
 

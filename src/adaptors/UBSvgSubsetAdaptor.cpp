@@ -562,11 +562,26 @@ void UBSvgSubsetAdaptor::UBSvgSubsetReader::processElement()
             strokesGroup = new UBGraphicsStrokesGroup();
             graphicsItemFromSvg(strokesGroup);
 
-            bool hasZValue;
-            qreal zValue = normalizedZValue(&hasZValue);
+            bool hasZValue = false;
+            qreal zValue = 0.0;
+
+            auto ubZValue = mXmlReader.attributes().value(mNamespaceUri, "z-value");
+            if (!ubZValue.isNull())
+            {
+                zValue = ubZValue.toString().toDouble(&hasZValue);
+
+                // Only clamp genuinely invalid (legacy) values. Sub-integer
+                // values in the object band are valid and are used to place a
+                // highlighter just below pen ink.
+                if (zValue < -1000000.0)
+                    zValue = -999999.0;
+            }
 
             if (hasZValue)
             {
+                // graphicsItemFromSvg() above parsed the same attribute with
+                // the legacy clamp; restore the exact value here.
+                UBGraphicsItem::assignZValue(strokesGroup, zValue);
                 mGroupZIndex = zValue;
                 mGroupHasInfo = true;
             }
@@ -1316,7 +1331,7 @@ bool UBSvgSubsetAdaptor::UBSvgSubsetWriter::persistScene(std::shared_ptr<UBDocum
                     if (colorOnDarkBackground.isValid() && colorOnLightBackground.isValid() && sg)
                     {
                         mXmlWriter.writeAttribute(UBSettings::uniboardDocumentNamespaceUri, "z-value"
-                                                  , QString("%1").arg(polygonItem->strokesGroup()->zValue()));
+                                                  , QString::number(polygonItem->strokesGroup()->zValue(), 'g', 15));
 
                         mXmlWriter.writeAttribute(UBSettings::uniboardDocumentNamespaceUri
                                                   , "fill-on-dark-background", colorOnDarkBackground.name());

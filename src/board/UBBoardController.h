@@ -58,6 +58,7 @@ class UBSoftwareUpdateDialog;
 class UBGraphicsMediaItem;
 class UBGraphicsWidgetItem;
 class UBBoardPaletteManager;
+class UBToolbarButtonGroup;
 class UBItem;
 class UBGraphicsItem;
 
@@ -212,6 +213,10 @@ class UBBoardController : public UBDocumentContainer
         void zoomRestore();
         void centerRestore();
         void centerOn(QPointF scenePoint = QPointF(0,0)) const;
+
+        // Centers the page while leaving room for the left-docked stylus
+        // palette, so content appears in the free area to its right.
+        void centerOnDefaultPosition();
         void zoom(const qreal ratio, QPointF scenePoint);
         void handScroll(qreal dx, qreal dy);
         void previousScene();
@@ -292,6 +297,7 @@ class UBBoardController : public UBDocumentContainer
     private:
         void initBackgroundGridSize();
         void updatePageSizeState();
+        void showWidthSliderPopup(QAction *anchorAction, bool lineWidth);
         int autosaveTimeoutFromSettings() const;
 
         UBMainWindow *mMainWindow;
@@ -299,6 +305,8 @@ class UBBoardController : public UBDocumentContainer
         int mActiveSceneIndex;
         int mSwitchToSceneIndex{-1};
         UBBoardPaletteManager *mPaletteManager;
+        UBToolbarButtonGroup *mEraserWidthChoice;
+        int mStrokeEraserActionIndex;
         UBSoftwareUpdateDialog *mSoftwareUpdateDialog;
         UBMessageWindow *mMessageWindow;
         UBEmbedController *mEmbedController;
@@ -331,6 +339,12 @@ class UBBoardController : public UBDocumentContainer
         void boardViewResized(QResizeEvent* event);
         void updateBackgroundActionsState(bool isDark, UBPageBackground pageBackground);
         void colorPaletteChanged();
+        void openCustomColorDialog();
+        void openLineWidthSlider();
+        void openEraserWidthSlider();
+        void updateWidthButtonIcons();
+        void eraserWidthActionActivated(int index);
+        void eraserToolChanged(int tool);
         void libraryDialogClosed(int ret);
         void lastWindowClosed();
         void onDownloadModalFinished();

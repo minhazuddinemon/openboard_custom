@@ -63,6 +63,7 @@ UBDrawingController::UBDrawingController(QObject * parent)
     , mStylusTool((UBStylusTool::Enum)-1)
     , mLatestDrawingTool((UBStylusTool::Enum)-1)
     , mIsDesktopMode(false)
+    , mLaserColor(QColor(255, 0, 0))
 {
     connect(UBSettings::settings(), SIGNAL(colorContextChanged()), this, SIGNAL(colorPaletteChanged()));
 
@@ -127,7 +128,8 @@ void UBDrawingController::setStylusTool(int tool)
 
         if (mStylusTool == UBStylusTool::Pen)
             UBApplication::mainWindow->actionPen->setChecked(true);
-        else if (mStylusTool == UBStylusTool::Eraser)
+        else if (mStylusTool == UBStylusTool::Eraser
+                 || mStylusTool == UBStylusTool::StrokeEraser)
             UBApplication::mainWindow->actionEraser->setChecked(true);
         else if (mStylusTool == UBStylusTool::Marker)
             UBApplication::mainWindow->actionMarker->setChecked(true);
@@ -153,7 +155,8 @@ void UBDrawingController::setStylusTool(int tool)
 
         // workaround for #827
         // glitches when moving objects fast
-        if (mStylusTool == UBStylusTool::Selector || mStylusTool == UBStylusTool::Play)
+        if (mStylusTool == UBStylusTool::Selector || mStylusTool == UBStylusTool::Play
+                || mStylusTool == UBStylusTool::Lasso)
         {
             UBApplication::boardController->controlView()->setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
         }
@@ -233,6 +236,32 @@ void UBDrawingController::setLineWidthIndex(int index)
 }
 
 
+void UBDrawingController::setCustomLineWidth(qreal width)
+{
+    width = qBound<qreal>(1.0, width, 60.0);
+
+    UBSettings* settings = UBSettings::settings();
+
+    // The Line group doubles as the marker width group while the marker tool
+    // is active, so edit whichever strong width is currently being displayed.
+    if (stylusTool() == UBStylusTool::Marker)
+        settings->setMarkerStrongWidth(width);
+    else
+        settings->setPenStrongWidth(width);
+
+    setLineWidthIndex(UBWidth::Strong);
+}
+
+
+void UBDrawingController::setCustomEraserWidth(qreal width)
+{
+    width = qBound<qreal>(10.0, width, 300.0);
+
+    UBSettings::settings()->setEraserStrongWidth(width);
+    setEraserWidthIndex(UBWidth::Strong);
+}
+
+
 int UBDrawingController::currentToolColorIndex()
 {
     if (stylusTool() == UBStylusTool::Pen || stylusTool() == UBStylusTool::Line)
@@ -266,6 +295,10 @@ QColor UBDrawingController::toolColor(bool onDarkBackground)
     {
         return UBSettings::settings()->markerColor(onDarkBackground);
     }
+    else if (stylusTool() == UBStylusTool::Laser)
+    {
+        return laserColor();
+    }
     else
     {
         //failsafe
@@ -278,6 +311,54 @@ QColor UBDrawingController::toolColor(bool onDarkBackground)
             return Qt::black;
         }
     }
+}
+
+
+QColor UBDrawingController::invertedColor(const QColor& color)
+{
+    return QColor(255 - color.red(),
+                  255 - color.green(),
+                  255 - color.blue(),
+                  color.alpha());
+}
+
+
+void UBDrawingController::setCustomColor(const QColor& color)
+{
+    if (!color.isValid())
+        return;
+
+    const bool onDarkBackground = UBSettings::settings()->isDarkBackground();
+
+    // Store the twin pair so a later dark/light theme switch keeps the pen
+    // readable without having to recompute the inverted color.
+    const QColor darkBackgroundColor = onDarkBackground ? color : invertedColor(color);
+    const QColor lightBackgroundColor = onDarkBackground ? invertedColor(color) : color;
+
+    auto pushRecentColor = [](UBColorListSetting* palette, const QColor& newColor)
+    {
+        if (!palette)
+            return;
+
+        const QList<QColor> colors = palette->colors();
+
+        // Move the previous most-recent color (slot 6) to slot 7 first.
+        if (colors.size() > CustomColorStartIndex + 1)
+            palette->setColor(CustomColorStartIndex + 1, colors.at(CustomColorStartIndex));
+
+        palette->setColor(CustomColorStartIndex, newColor);
+    };
+
+    UBSettings* settings = UBSettings::settings();
+
+    // Keep the history shared between pen and marker so the toolbar shows the
+    // same two custom colors for every drawing tool.
+    pushRecentColor(settings->boardPenDarkBackgroundSelectedColors, darkBackgroundColor);
+    pushRecentColor(settings->boardPenLightBackgroundSelectedColors, lightBackgroundColor);
+    pushRecentColor(settings->boardMarkerDarkBackgroundSelectedColors, darkBackgroundColor);
+    pushRecentColor(settings->boardMarkerLightBackgroundSelectedColors, lightBackgroundColor);
+
+    emit colorPaletteChanged();
 }
 
 
@@ -302,6 +383,8 @@ void UBDrawingController::setEraserWidthIndex(int index)
 {
     setStylusTool(UBStylusTool::Eraser);
     UBSettings::settings()->setEraserWidthIndex(index);
+
+    emit eraserWidthIndexChanged(index);
 }
 
 void UBDrawingController::setPenColor(bool onDarkBackground, const QColor& color, int pIndex)
@@ -444,5 +527,26 @@ void UBDrawingController::captureToolSelected(bool checked)
 {
     if (checked)
         setStylusTool(UBStylusTool::Capture);
+}
+
+
+void UBDrawingController::setLassoMode()
+{
+    setStylusTool(UBStylusTool::Lasso);
+}
+
+
+void UBDrawingController::setLaserMode()
+{
+    setStylusTool(UBStylusTool::Laser);
+}
+
+
+void UBDrawingController::setLaserColor(const QColor& color)
+{
+    if (!color.isValid())
+        return;
+
+    mLaserColor = color;
 }
 

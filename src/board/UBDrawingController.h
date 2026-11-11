@@ -61,9 +61,31 @@ class UBDrawingController : public QObject
         QColor currentToolColor();
         QColor toolColor(bool onDarkBackground);
 
+        // Indices of the two recent custom-color slots (toolbar slots 6 and 7).
+        static constexpr int CustomColorStartIndex = 5;
+        static constexpr int CustomColorCount = 2;
+
+        // Returns the color that keeps similar contrast on the twin board theme.
+        static QColor invertedColor(const QColor& color);
+
+        // Dedicated colour for the virtual laser pointer. It is independent of
+        // the pen colour and defaults to red.
+        QColor laserColor() const { return mLaserColor; }
+        void setLaserColor(const QColor& color);
+
+        // Stores color in the recent-custom-color slots (index 5 becomes the
+        // most recent color, the previous index 5 moves to index 6). Both the
+        // dark- and light-background variants are stored.
+        void setCustomColor(const QColor& color);
+
         void setPenColor(bool onDarkBackground, const QColor& color, int pIndex);
         void setMarkerColor(bool onDarkBackground, const QColor& color, int pIndex);
         void setMarkerAlpha(qreal alpha);
+
+        // Sets the user-defined strong/custom width (toolbar slot 3) and
+        // selects that slot immediately. Widths are persisted by UBSettings.
+        void setCustomLineWidth(qreal width);
+        void setCustomEraserWidth(qreal width);
 
         void setActiveRuler(UBAbstractDrawRuler* ruler);
         UBAbstractDrawRuler* activeRuler() const;
@@ -79,6 +101,8 @@ class UBDrawingController : public QObject
     public slots:
 
         void setStylusTool(int tool);
+        void setLassoMode();
+        void setLaserMode();
         void setLineWidthIndex(int index);
         void setColorIndex(int index);
         void setEraserWidthIndex(int index);
@@ -88,6 +112,7 @@ class UBDrawingController : public QObject
         void colorPaletteChanged();
 
         void lineWidthIndexChanged(int index);
+        void eraserWidthIndexChanged(int index);
         void colorIndexChanged(int index);
 
     private:
@@ -95,6 +120,7 @@ class UBDrawingController : public QObject
         UBStylusTool::Enum mStylusTool;
         UBStylusTool::Enum mLatestDrawingTool;
         bool mIsDesktopMode;
+        QColor mLaserColor;
 
         static UBDrawingController* sDrawingController;
 

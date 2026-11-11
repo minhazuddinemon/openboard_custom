@@ -74,7 +74,10 @@ struct UBStylusTool
         Pointer,
         Line,
         Text,
-        Capture
+        Capture,
+        StrokeEraser,
+        Lasso,
+        Laser
     };
 };
 

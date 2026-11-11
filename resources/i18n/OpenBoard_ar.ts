@@ -1528,7 +1528,7 @@ Do you wish to override the security check and continue ?   </source>
 <context>
     <name>UBBoardPaletteManager</name>
     <message>
-        <location filename="../../src/board/UBBoardPaletteManager.cpp" line="934"/>
+        <location filename="../../src/board/UBBoardPaletteManager.cpp" line="935"/>
         <source>Error Adding Image to Library</source>
         <translation>خطأ عند اضافة الصورة الى المكتبة</translation>
     </message>

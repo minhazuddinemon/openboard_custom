@@ -138,8 +138,39 @@ bool UBExportPDF::persistsDocument(std::shared_ptr<UBDocumentProxy> pDocumentPro
         else if (pageIndex < existingPageCount)
             pdfWriter.newPage();
 
-        // Render the scene
-        scene->render(&pdfPainter, QRectF(), scene->normalizedSceneRect());
+        // QGraphicsScene::render() preserves the aspect ratio by default, so
+        // the letterbox/pillarbox areas around the scaled scene are never
+        // painted by UBGraphicsScene::drawBackground(). Worse, letting Qt
+        // choose the target internally means the background pass can repaint
+        // outside our pre-fill.
+        //
+        // Compute the aspect-fitted target explicitly, fill the whole physical
+        // page first, then render *only* inside that target. The scene's
+        // background pass is clipped to the target, so the page fill outside
+        // it is guaranteed to survive on dark pages.
+        pdfPainter.save();
+        pdfPainter.resetTransform();
+        pdfPainter.setClipping(false);
+
+        QRectF pageRect(pdfPainter.viewport());
+        if (pageRect.isEmpty())
+            pageRect = QRectF(0, 0, pdfPainter.device()->width(),
+                              pdfPainter.device()->height());
+
+        const QRectF sourceRect(scene->normalizedSceneRect());
+
+        QSizeF contentSize = sourceRect.size();
+        contentSize.scale(pageRect.size(), Qt::KeepAspectRatio);
+
+        QRectF contentRect(QPointF(0, 0), contentSize);
+        contentRect.moveCenter(pageRect.center());
+
+        pdfPainter.fillRect(pageRect, scene->isDarkBackground()
+                            ? QColor(Qt::black) : QColor(Qt::white));
+
+        scene->render(&pdfPainter, contentRect, sourceRect, Qt::IgnoreAspectRatio);
+
+        pdfPainter.restore();
 
         // Restore screen rendering quality
         scene->setRenderingContext(UBGraphicsScene::Screen);

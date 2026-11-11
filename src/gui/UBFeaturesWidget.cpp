@@ -74,6 +74,16 @@ UBFeaturesWidget::UBFeaturesWidget(QWidget *parent, const char *name)
 
     centralWidget = new UBFeaturesCentralWidget(this);
     controller->assignFeaturesListView(centralWidget->listView());
+
+    // The library is rendered on a light background. Force crisp dark item
+    // labels so folder/category names stay readable even when the application
+    // palette provides white text for the dark board.
+    const QString libraryListStyle =
+            "QListView { color: #222222; }"
+            "QListView::item { color: #222222; }"
+            "QListView::item:selected { color: #FFFFFF; }";
+    pathListView->setStyleSheet(libraryListStyle);
+    centralWidget->listView()->setStyleSheet(libraryListStyle);
     centralWidget->setSliderPosition(UBSettings::settings()->featureSliderPosition->get().toInt());
 
     //Bottom actionbar for DnD, quick search etc
