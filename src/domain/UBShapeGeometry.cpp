@@ -226,15 +226,9 @@ QPointF freeTriangleApex(const QPointF& baseStart, const QPointF& baseEnd)
     if (length <= 0.0)
         return baseStart;
 
-    QPointF normal(-base.y() / length, base.x() / length);
-
-    // Apex on the side opposite the drag's vertical direction. A horizontal
-    // drag points up; a vertical drag points right.
-    const qreal desiredSign = (base.y() < 0.0) ? 1.0 : -1.0;
-    if (normal.y() * desiredSign < 0.0)
-        normal = -normal;
-    else if (qFuzzyIsNull(normal.y()) && normal.x() < 0.0)
-        normal = -normal;
+    // Fixed normal relative to the base direction (scene coordinates, y down),
+    // so the apex rotates continuously with the base instead of flipping.
+    const QPointF normal(base.y() / length, -base.x() / length);
 
     return (baseStart + baseEnd) / 2.0 + normal * (length * 0.8660254037844386);
 }
