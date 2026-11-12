@@ -68,6 +68,17 @@ QVector<QPointF> regularPolygon(const QRectF& box, int sides, qreal startAngle)
 
 constexpr int kRoundedRectangleKind = 13;
 constexpr int kRoundedSquareKind = 14;
+constexpr int kArrowKind = 16;
+constexpr int kDoubleArrowKind = 17;
+
+// Arrow head: proportional to the stroke width, never below a sensible
+// minimum, and never longer than a fraction of the shaft. Toolbar icons have
+// no stroke width and use a fraction of the shaft instead.
+constexpr qreal kArrowHeadMinSize = 8.0;
+constexpr qreal kArrowHeadWidthFactor = 6.0;
+constexpr qreal kArrowHeadIconFraction = 0.35;
+constexpr qreal kArrowBarbRatio = 0.5773502691896258; // tan(30 degrees)
+constexpr qreal kArrowHeadMaxLineFraction = 0.4;
 
 // Maximum corner radius in scene units. Tune this to make the corners rounder
 // or sharper.
@@ -159,6 +170,83 @@ QVector<QPointF> roundedSquarePoints(const QRectF& dragRect)
     return roundedRectangleOutline(box, roundedCornerRadius(shorter));
 }
 
+QVector<QPointF> openLinePoints(const QRectF& dragRect)
+{
+    QVector<QPointF> points;
+    points << dragRect.topLeft() << dragRect.bottomRight();
+    return points;
+}
+
+qreal arrowHeadSize(const QPointF& start, const QPointF& tip, qreal strokeWidth)
+{
+    const QPointF shaft = tip - start;
+    const qreal length = std::hypot(shaft.x(), shaft.y());
+    if (length <= 0.0)
+        return 0.0;
+
+    const qreal head = (strokeWidth > 0.0)
+            ? qMax(strokeWidth * kArrowHeadWidthFactor, kArrowHeadMinSize)
+            : length * kArrowHeadIconFraction;
+
+    return qMin(head, length * kArrowHeadMaxLineFraction);
+}
+
+QVector<QPointF> arrowPoints(const QRectF& dragRect, qreal strokeWidth)
+{
+    const QPointF start = dragRect.topLeft();
+    const QPointF tip = dragRect.bottomRight();
+
+    // Shaft first, then the head as out-and-back segments in the same stroke.
+    QVector<QPointF> points;
+    points << start << tip;
+
+    const qreal head = arrowHeadSize(start, tip, strokeWidth);
+    if (head > 0.0)
+    {
+        const QPointF shaft = tip - start;
+        const qreal length = std::hypot(shaft.x(), shaft.y());
+        const QPointF direction = shaft / length;
+        const QPointF normal(-direction.y(), direction.x());
+        const QPointF back = tip - direction * head;
+        const QPointF barbOffset = normal * (head * kArrowBarbRatio);
+
+        points << back + barbOffset << tip << back - barbOffset;
+    }
+
+    return points;
+}
+
+QVector<QPointF> doubleArrowPoints(const QRectF& dragRect, qreal strokeWidth)
+{
+    const QPointF start = dragRect.topLeft();
+    const QPointF tip = dragRect.bottomRight();
+
+    QVector<QPointF> points;
+    points << start;
+
+    const qreal head = arrowHeadSize(start, tip, strokeWidth);
+    if (head <= 0.0)
+    {
+        points << tip;
+        return points;
+    }
+
+    const QPointF shaft = tip - start;
+    const qreal length = std::hypot(shaft.x(), shaft.y());
+    const QPointF direction = shaft / length;
+    const QPointF normal(-direction.y(), direction.x());
+    const QPointF barbOffset = normal * (head * kArrowBarbRatio);
+
+    const QPointF startBack = start + direction * head;
+    const QPointF tipBack = tip - direction * head;
+
+    points << startBack + barbOffset << start << startBack - barbOffset
+           << start << tip
+           << tipBack + barbOffset << tip << tipBack - barbOffset;
+
+    return points;
+}
+
 } // namespace
 
 namespace UBShapeGeometry
@@ -214,6 +302,21 @@ QVector<QPointF> roundedRectangle(const QRectF& dragRect)
 QVector<QPointF> roundedSquare(const QRectF& dragRect)
 {
     return roundedSquarePoints(dragRect);
+}
+
+QVector<QPointF> lineShape(const QRectF& dragRect)
+{
+    return openLinePoints(dragRect);
+}
+
+QVector<QPointF> arrowShape(const QRectF& dragRect)
+{
+    return arrowPoints(dragRect, 0.0);
+}
+
+QVector<QPointF> doubleArrowShape(const QRectF& dragRect)
+{
+    return doubleArrowPoints(dragRect, 0.0);
 }
 
 QVector<QPointF> triangle(const QRectF& dragRect)
@@ -407,7 +510,10 @@ const QVector<ShapeDefinition> sShapes = {
     {11, "Right-angle triangle", false, &rightTriangle},
     {12, "Free triangle", false, &freeTriangle},
     {13, "Rounded rectangle", false, &roundedRectangle},
-    {14, "Rounded square", true, &roundedSquare}
+    {14, "Rounded square", true, &roundedSquare},
+    {15, "Line", false, &lineShape},
+    {16, "Arrow", false, &arrowShape},
+    {17, "Double arrow", false, &doubleArrowShape}
 };
 
 } // namespace
@@ -417,13 +523,22 @@ const QVector<ShapeDefinition>& shapes()
     return sShapes;
 }
 
-QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect)
+QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect, qreal strokeWidth)
 {
     if (kind == kRoundedRectangleKind)
         return roundedRectanglePoints(dragRect);
 
     if (kind == kRoundedSquareKind)
         return roundedSquarePoints(dragRect);
+
+    if (kind == UBShapeLineKind)
+        return openLinePoints(dragRect);
+
+    if (kind == kArrowKind)
+        return arrowPoints(dragRect, strokeWidth);
+
+    if (kind == kDoubleArrowKind)
+        return doubleArrowPoints(dragRect, strokeWidth);
 
     if (kind < 0 || kind >= sShapes.size())
         kind = 0;

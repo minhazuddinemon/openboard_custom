@@ -726,7 +726,8 @@ QList<int> UBSettings::shapeRecentKinds()
         if (kind == 10)
             kind = 12;
 
-        if (!ok || kind <= 0 || kind >= UBShapeKindCount)
+        if (!ok || kind <= 0 || kind >= UBShapeKindCount
+                || kind == UBShapeLineKind)
             continue;
         if (!result.contains(kind))
             result << kind;
@@ -757,7 +758,7 @@ void UBSettings::setShapeRecentKinds(const QList<int>& kinds)
         if (kind == 10)
             kind = 12;
 
-        if (kind <= 0 || kind >= UBShapeKindCount)
+        if (kind <= 0 || kind >= UBShapeKindCount || kind == UBShapeLineKind)
             continue;
         const QString token = QString::number(kind);
         if (!tokens.contains(token))

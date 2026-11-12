@@ -40,8 +40,11 @@
 // drift apart.
 constexpr qreal StrokeEraserCircleDiameter = 10.0;
 
-// Number of Shape-tool kinds (0 = rectangle ... 12 = free triangle).
-constexpr int UBShapeKindCount = 15;
+// Kind 15 is the open line used by the fixed top-bar Line button.
+constexpr int UBShapeLineKind = 15;
+
+// Number of Shape-tool kinds (0 = rectangle ... 17 = double arrow).
+constexpr int UBShapeKindCount = 18;
 
 // Diameter, in device-independent pixels, of the free-triangle apex handle.
 constexpr qreal ShapeHandleDiameter = 14.0;

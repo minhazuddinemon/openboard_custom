@@ -229,7 +229,10 @@ QIcon createShapeKindIcon(int kind)
     painter.setRenderHint(QPainter::Antialiasing);
 
     const QColor ink = QApplication::palette().color(QPalette::Text);
-    painter.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const bool openShape = kind >= UBShapeLineKind;
+    const qreal iconPenWidth = openShape ? 1.5 : 2.0;
+    painter.setPen(QPen(ink, iconPenWidth, Qt::SolidLine,
+                        Qt::RoundCap, Qt::RoundJoin));
     painter.setBrush(Qt::NoBrush);
 
     // Use the same geometry as the board. A slightly wide box keeps the ellipse
@@ -259,7 +262,10 @@ QIcon createShapeKindIcon(int kind)
                                  offset.y() + point.y() * scale);
         }
 
-        painter.drawPolygon(polygon);
+        if (openShape)
+            painter.drawPolyline(polygon);
+        else
+            painter.drawPolygon(polygon);
 
         // Small identifying marks so each editable kind is recognisable.
         if (kind == 6)
@@ -305,27 +311,6 @@ QIcon createShapeKindIcon(int kind)
         }
         // Kind 4 (isosceles triangle) deliberately has no mark.
     }
-
-    return QIcon(pixmap);
-}
-
-QIcon createShapeLineIcon()
-{
-    constexpr int iconSize = 32;
-    constexpr qreal margin = 6.0;
-
-    QPixmap pixmap(iconSize, iconSize);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
-
-    const QColor ink = QApplication::palette().color(QPalette::Text);
-    painter.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap));
-
-    // Plain diagonal line; the Line tool is not a shape kind (yet).
-    painter.drawLine(QPointF(margin, iconSize - margin),
-                     QPointF(iconSize - margin, margin));
 
     return QIcon(pixmap);
 }
@@ -783,7 +768,7 @@ void UBBoardController::setupToolbar()
     QAction *shapeLine = new QAction(tr("Line"), mMainWindow->boardToolBar);
     shapeLine->setCheckable(true);
     shapeLine->setToolTip(tr("Draw a line"));
-    shapeLine->setIcon(createShapeLineIcon());
+    shapeLine->setIcon(createShapeKindIcon(UBShapeLineKind));
 
     QAction *shapeRecent1 = new QAction(tr("Recent shape"), mMainWindow->boardToolBar);
     shapeRecent1->setCheckable(true);
@@ -2841,7 +2826,7 @@ void UBBoardController::chooseShapeKind(int kind, bool updateRecent)
 
     drawingController->setShapeKind(kind);
 
-    if (updateRecent && kind != 0)
+    if (updateRecent && kind != 0 && kind != UBShapeLineKind)
     {
         mShapeRecentKinds.removeAll(kind);
         mShapeRecentKinds.prepend(kind);
@@ -2877,6 +2862,8 @@ void UBBoardController::refreshShapeGroupSelection()
 
         if (kind == 0)
             index = 0;
+        else if (kind == UBShapeLineKind)
+            index = 1;
         else if (mShapeRecentKinds.size() > 0 && kind == mShapeRecentKinds.at(0))
             index = 2;
         else if (mShapeRecentKinds.size() > 1 && kind == mShapeRecentKinds.at(1))
@@ -2920,8 +2907,9 @@ void UBBoardController::updateShapeRecentActions()
 
 void UBBoardController::activateLineTool()
 {
-    // Kept isolated so a later phase can turn this into an open-shape kind.
-    UBDrawingController::drawingController()->setStylusTool(UBStylusTool::Line);
+    // The old Line tool code is kept, but the fixed button now selects the
+    // Shape tool's open line kind.
+    chooseShapeKind(UBShapeLineKind, false);
 }
 
 

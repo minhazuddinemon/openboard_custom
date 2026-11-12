@@ -40,6 +40,7 @@
 #include "UBItem.h"
 #include "UBGraphicsLaserStroke.h"
 
+class QGraphicsObject;
 class UBGraphicsPixmapItem;
 class UBGraphicsSvgItem;
 class UBGraphicsPolygonItem;
@@ -426,6 +427,8 @@ signals:
         void addShapePolygonPoints(const QVector<QPointF>& points, qreal pWidth);
         void updateShapeHandle();
         void removeShapeHandle();
+        void updateShapeAngleLabel(const QPointF& scenePos, qreal angle);
+        void removeShapeAngleLabel();
         bool isPointOnShapeHandle(const QPointF& scenePos) const;
 
         void initPolygonItem(UBGraphicsPolygonItem*);
@@ -540,6 +543,7 @@ signals:
         int mShapeEditingKind;
         QPointF mShapeHandlePos;
         QGraphicsItem* mShapeHandle;
+        QGraphicsObject* mShapeAngleLabel;
 
         QSet<QGraphicsItem*> mTools;
 

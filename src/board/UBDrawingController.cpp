@@ -194,7 +194,8 @@ bool UBDrawingController::isSnappingTool() const
 {
     return (mStylusTool == UBStylusTool::Selector)
             || (mStylusTool == UBStylusTool::Play)
-            || (mStylusTool == UBStylusTool::Line);
+            || (mStylusTool == UBStylusTool::Line)
+            || (mStylusTool == UBStylusTool::Shape);
 }
 
 

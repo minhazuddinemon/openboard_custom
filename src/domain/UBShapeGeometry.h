@@ -43,6 +43,9 @@ QVector<QPointF> circle(const QRectF& dragRect);
 QVector<QPointF> square(const QRectF& dragRect);
 QVector<QPointF> roundedRectangle(const QRectF& dragRect);
 QVector<QPointF> roundedSquare(const QRectF& dragRect);
+QVector<QPointF> lineShape(const QRectF& dragRect);
+QVector<QPointF> arrowShape(const QRectF& dragRect);
+QVector<QPointF> doubleArrowShape(const QRectF& dragRect);
 QVector<QPointF> triangle(const QRectF& dragRect);
 QVector<QPointF> diamond(const QRectF& dragRect);
 QVector<QPointF> parallelogram(const QRectF& dragRect);
@@ -62,7 +65,8 @@ QVector<QPointF> editableShapePoints(int kind, const QRectF& dragRect,
                                      const QPointF& handlePos);
 
 const QVector<ShapeDefinition>& shapes();
-QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect);
+QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect,
+                               qreal strokeWidth = 0.0);
 QString nameForKind(int kind);
 int shapeKindCount();
 bool isConstrainedKind(int kind);

@@ -344,6 +344,7 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mShapeForceCommit(false)
     , mShapeEditingKind(0)
     , mShapeHandle(0)
+    , mShapeAngleLabel(0)
     , mArcPolygonItem(0)
     , mRenderingContext(Screen)
     , mCurrentStroke(0)
@@ -391,6 +392,7 @@ UBGraphicsScene::~UBGraphicsScene()
     mShapeEditing = false;
     mShapeHandleDragging = false;
     removeShapeHandle();
+    removeShapeAngleLabel();
 
     clearLassoPreview();
 
@@ -504,7 +506,8 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
                 bool isLine = UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Line;
                 QPointF pos = scenePos;
 
-                if (isLine && isSnapping())
+                if ((isLine || currentTool == UBStylusTool::Shape)
+                        && isSnapping())
                 {
                     pos += snap(scenePos);
                 }
@@ -582,6 +585,12 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
     UBStylusTool::Enum currentTool = (UBStylusTool::Enum)dc->stylusTool();
 
     QPointF position = QPointF(scenePos);
+
+    // The Shape tool snaps its moving point (and the editable handle) to the
+    // same grid as the old Line tool when the magnet is on.
+    if (currentTool == UBStylusTool::Shape && isSnapping())
+        position += snap(position);
+
     mCurrentPoint = position;
 
     if (mShapeEditing)
@@ -740,6 +749,14 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
 
             else if (currentTool == UBStylusTool::Shape) {
                 drawShapePreview(position, width);
+
+                // Open shapes show the old Line tool's angle readout as a
+                // canvas overlay so it also works with a graphics tablet.
+                if (dc->shapeKind() >= UBShapeLineKind)
+                {
+                    const QLineF radius(mShapeStartPoint, position);
+                    updateShapeAngleLabel(position, radius.angle());
+                }
             }
 
             else {
@@ -816,6 +833,8 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
 bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifiers)
 {
     bool accepted = false;
+
+    removeShapeAngleLabel();
 
     if (mPointer)
     {
@@ -1687,6 +1706,56 @@ public:
     }
 };
 
+class UBShapeAngleItem : public QGraphicsObject
+{
+public:
+    UBShapeAngleItem()
+    {
+        setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+        setAcceptedMouseButtons(Qt::NoButton);
+        setZValue(10000001.0);
+    }
+
+    void setAngle(qreal angle)
+    {
+        const QString text = QString::number(angle, 'f', 1) + QChar(176);
+        if (text == mText)
+            return;
+
+        mText = text;
+        update();
+    }
+
+    QRectF boundingRect() const override
+    {
+        // Small rounded box near the pen, offset so the pen does not cover it.
+        return QRectF(14.0, -44.0, 45.0, 30.0);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
+    {
+        // Overlay only: never render into PDF, thumbnails or podcast frames.
+        if (scene()
+                && static_cast<UBGraphicsScene*>(scene())->renderingContext()
+                        != UBGraphicsScene::Screen)
+        {
+            return;
+        }
+
+        const QRectF box = boundingRect().adjusted(1.0, 1.0, -1.0, -1.0);
+
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setBrush(QColor(Qt::white));
+        painter->setPen(QPen(QColor(Qt::black)));
+        painter->drawRoundedRect(box, 6, 6);
+        painter->setFont(QFont("Arial", 10));
+        painter->drawText(boundingRect(), Qt::AlignCenter, mText);
+    }
+
+private:
+    QString mText;
+};
+
 } // namespace
 
 void UBGraphicsScene::drawShapePreview(const QPointF& pEndPoint, qreal pWidth)
@@ -1709,7 +1778,7 @@ void UBGraphicsScene::drawShapePreview(const QPointF& pEndPoint, qreal pWidth)
         return;
 
     const QVector<QPointF> points = UBShapeGeometry::pointsForKind(
-            UBDrawingController::drawingController()->shapeKind(), dragRect);
+            UBDrawingController::drawingController()->shapeKind(), dragRect, pWidth);
 
     addShapePolygonPoints(points, pWidth);
 }
@@ -1790,6 +1859,7 @@ void UBGraphicsScene::cancelShapePreview()
     mShapeEditing = false;
     mShapeHandleDragging = false;
     removeShapeHandle();
+    removeShapeAngleLabel();
 
     clearShapePreview();
 
@@ -1828,6 +1898,34 @@ void UBGraphicsScene::removeShapeHandle()
 
     delete mShapeHandle;
     mShapeHandle = NULL;
+}
+
+void UBGraphicsScene::updateShapeAngleLabel(const QPointF& scenePos, qreal angle)
+{
+    if (!mShapeAngleLabel)
+    {
+        mShapeAngleLabel = new UBShapeAngleItem();
+        QGraphicsScene::addItem(mShapeAngleLabel);
+    }
+
+    static_cast<UBShapeAngleItem*>(mShapeAngleLabel)->setAngle(angle);
+    mShapeAngleLabel->setPos(scenePos);
+    mShapeAngleLabel->setVisible(true);
+}
+
+void UBGraphicsScene::removeShapeAngleLabel()
+{
+    if (!mShapeAngleLabel)
+        return;
+
+    QGraphicsObject* label = mShapeAngleLabel;
+    mShapeAngleLabel = NULL; // never leave a dangling pointer
+
+    if (label->scene() == this)
+        QGraphicsScene::removeItem(label);
+
+    // Deferred: this can run inside an input event.
+    label->deleteLater();
 }
 
 bool UBGraphicsScene::isPointOnShapeHandle(const QPointF& scenePos) const
@@ -3362,6 +3460,7 @@ void UBGraphicsScene::stylusToolChanged(int tool, int previousTool)
 {
     if (tool != previousTool)
     {
+        removeShapeAngleLabel();
         hideTool();
 
         if (mShapeEditing)
