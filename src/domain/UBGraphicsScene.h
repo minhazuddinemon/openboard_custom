@@ -426,8 +426,6 @@ signals:
         void addShapePolygonPoints(const QVector<QPointF>& points, qreal pWidth);
         void updateShapeHandle();
         void removeShapeHandle();
-        void updateShapeStartMarker();
-        void removeShapeStartMarker();
         bool isPointOnShapeHandle(const QPointF& scenePos) const;
 
         void initPolygonItem(UBGraphicsPolygonItem*);
@@ -542,7 +540,6 @@ signals:
         QPointF mShapeBaseEnd;
         QPointF mShapeApex;
         QGraphicsItem* mShapeHandle;
-        QGraphicsItem* mShapeStartMarker;
 
         QSet<QGraphicsItem*> mTools;
 

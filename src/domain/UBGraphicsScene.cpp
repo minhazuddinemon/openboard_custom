@@ -343,7 +343,6 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mShapeApexDragging(false)
     , mShapeForceCommit(false)
     , mShapeHandle(0)
-    , mShapeStartMarker(0)
     , mArcPolygonItem(0)
     , mRenderingContext(Screen)
     , mCurrentStroke(0)
@@ -391,7 +390,6 @@ UBGraphicsScene::~UBGraphicsScene()
     mShapeEditing = false;
     mShapeApexDragging = false;
     removeShapeHandle();
-    removeShapeStartMarker();
 
     clearLassoPreview();
 
@@ -518,7 +516,6 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
                     // is nothing to draw until the pointer moves.
                     mShapeStartPoint = pos;
                     mShapeGestureActive = true;
-                    updateShapeStartMarker();
                 }
                 else
                 {
@@ -868,9 +865,6 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
             return true;
         }
 
-        // The apex handle takes over from the start-point ring.
-        removeShapeStartMarker();
-
         mShapeEditing = true;
         mShapeApexDragging = false;
         mShapeBaseStart = mShapeStartPoint;
@@ -895,7 +889,6 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     if (currentTool == UBStylusTool::Shape)
     {
         mShapeGestureActive = false;
-        removeShapeStartMarker();
 
         // A tiny accidental drag leaves no preview polygon behind: do not
         // create an empty stroke group or push an empty undo command.
@@ -1650,45 +1643,6 @@ void UBGraphicsScene::drawCurve(const QList<QPointF>& points, qreal startWidth, 
 namespace
 {
 
-class UBShapeStartMarkerItem : public QGraphicsObject
-{
-public:
-    UBShapeStartMarkerItem()
-    {
-        setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
-        setAcceptedMouseButtons(Qt::NoButton);
-        setZValue(9999999.0);
-    }
-
-    QRectF boundingRect() const override
-    {
-        const qreal radius = ShapeStartMarkerDiameter / 2.0;
-        return QRectF(-radius, -radius, ShapeStartMarkerDiameter, ShapeStartMarkerDiameter);
-    }
-
-    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
-    {
-        // Overlay only: never render into PDF, thumbnails or podcast frames.
-        if (scene()
-                && static_cast<UBGraphicsScene*>(scene())->renderingContext()
-                        != UBGraphicsScene::Screen)
-        {
-            return;
-        }
-
-        const qreal radius = ShapeStartMarkerDiameter / 2.0;
-        const QRectF ring(-radius, -radius, ShapeStartMarkerDiameter, ShapeStartMarkerDiameter);
-
-        // Ring only (no fill), deliberately distinct from the filled apex handle.
-        painter->setRenderHint(QPainter::Antialiasing);
-        painter->setBrush(Qt::NoBrush);
-        painter->setPen(QPen(QColor(20, 20, 20), 3.0));
-        painter->drawEllipse(ring);
-        painter->setPen(QPen(QColor(255, 255, 255), 1.4));
-        painter->drawEllipse(ring);
-    }
-};
-
 class UBShapeHandleItem : public QGraphicsObject
 {
 public:
@@ -1828,7 +1782,6 @@ void UBGraphicsScene::cancelShapePreview()
     mShapeEditing = false;
     mShapeApexDragging = false;
     removeShapeHandle();
-    removeShapeStartMarker();
 
     clearShapePreview();
 
@@ -1869,33 +1822,6 @@ void UBGraphicsScene::removeShapeHandle()
     mShapeHandle = NULL;
 }
 
-void UBGraphicsScene::updateShapeStartMarker()
-{
-    if (!mShapeGestureActive)
-        return;
-
-    if (!mShapeStartMarker)
-    {
-        mShapeStartMarker = new UBShapeStartMarkerItem();
-        QGraphicsScene::addItem(mShapeStartMarker);
-    }
-
-    mShapeStartMarker->setPos(mShapeStartPoint);
-    mShapeStartMarker->setVisible(true);
-}
-
-void UBGraphicsScene::removeShapeStartMarker()
-{
-    if (!mShapeStartMarker)
-        return;
-
-    if (mShapeStartMarker->scene() == this)
-        QGraphicsScene::removeItem(mShapeStartMarker);
-
-    delete mShapeStartMarker;
-    mShapeStartMarker = NULL;
-}
-
 bool UBGraphicsScene::isPointOnShapeHandle(const QPointF& scenePos) const
 {
     if (!mShapeEditing || !mShapeHandle)
@@ -1922,7 +1848,6 @@ void UBGraphicsScene::commitShapeEditing()
     mShapeEditing = false;
     mShapeApexDragging = false;
     removeShapeHandle();
-    removeShapeStartMarker();
 
     // Reuse the normal release commit path without re-entering free-triangle
     // editing mode.
