@@ -88,6 +88,7 @@ class UBSettings : public QObject
         qreal shapeStrongWidth();
         void setShapeStrongWidth(qreal width);
         int shapeKind();
+        int shapeStrokeStyle();
         QList<int> shapeRecentKinds();
         int shapeColorIndex();
         QColor shapeColor(bool onDarkBackground);
@@ -472,6 +473,7 @@ class UBSettings : public QObject
         void setShapeWidthIndex(int index);
         void setShapeColorIndex(int index);
         void setShapeRecentKinds(const QList<int>& kinds);
+        void setShapeStrokeStyle(int style);
 
         void setEraserWidthIndex(int index);
         void setEraserFineWidth(qreal width);

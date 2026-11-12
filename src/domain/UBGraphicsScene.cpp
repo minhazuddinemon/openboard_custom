@@ -345,6 +345,7 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mShapeEditingKind(0)
     , mShapeHandle(0)
     , mShapeAngleLabel(0)
+    , mShapeStrokePreview(0)
     , mArcPolygonItem(0)
     , mRenderingContext(Screen)
     , mCurrentStroke(0)
@@ -393,6 +394,7 @@ UBGraphicsScene::~UBGraphicsScene()
     mShapeHandleDragging = false;
     removeShapeHandle();
     removeShapeAngleLabel();
+    removeShapeStrokePreview();
 
     clearLassoPreview();
 
@@ -602,12 +604,26 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
             width /= UBApplication::boardController->currentZoom();
 
             mShapeHandlePos = position;
-            clearShapePreview();
-            addShapePolygonPoints(
+
+            const QVector<QPointF> points =
                     UBShapeGeometry::editableShapePoints(mShapeEditingKind,
                                                          mShapeEditingDragRect,
-                                                         mShapeHandlePos),
-                    width);
+                                                         mShapeHandlePos);
+            const int style = UBSettings::settings()->shapeStrokeStyle();
+
+            clearShapePreview();
+            if (style == UBShapeStrokeStyleDashed
+                    || style == UBShapeStrokeStyleDotted)
+            {
+                // Same cheap single-item preview as the initial draw.
+                updateShapeStrokePreview(points, width, style);
+            }
+            else
+            {
+                removeShapeStrokePreview();
+                addShapeOutline(mShapeEditingKind, points, width);
+            }
+
             updateShapeHandle();
             accepted = true;
         }
@@ -850,6 +866,12 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     UBStylusTool::Enum currentTool = (UBStylusTool::Enum)tool;
     UBDrawingController *dc = UBDrawingController::drawingController();
 
+    if (currentTool == UBStylusTool::Shape
+            && !UBShapeGeometry::isEditableKind(dc->shapeKind()))
+    {
+        finishShapeStrokePreview();
+    }
+
     if (mShapeEditing && currentTool == UBStylusTool::Shape)
     {
         // Release after dragging the handle: keep editing.
@@ -882,8 +904,12 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
                 / (UBApplication::boardController->systemScaleFactor()
                    * UBApplication::boardController->currentZoom());
 
+        const bool hasPreview =
+                (mCurrentStroke && !mCurrentStroke->polygons().isEmpty())
+                || mShapeStrokePreview != nullptr;
+
         if (QLineF(mShapeStartPoint, dragEnd).length() < minimumSize
-                || !mCurrentStroke || mCurrentStroke->polygons().isEmpty())
+                || !hasPreview)
         {
             cancelShapePreview();
             return true;
@@ -901,11 +927,18 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
         width /= UBApplication::boardController->currentZoom();
 
         clearShapePreview();
-        addShapePolygonPoints(
-                UBShapeGeometry::editableShapePoints(mShapeEditingKind,
-                                                     mShapeEditingDragRect,
-                                                     mShapeHandlePos),
-                width);
+
+        // The cheap preview already shows the initial editable geometry.
+        // Solid builds its real preview here.
+        if (!mShapeStrokePreview)
+        {
+            addShapeOutline(
+                    mShapeEditingKind,
+                    UBShapeGeometry::editableShapePoints(mShapeEditingKind,
+                                                         mShapeEditingDragRect,
+                                                         mShapeHandlePos),
+                    width);
+        }
         updateShapeHandle();
 
         mShapeGestureActive = false;
@@ -1706,6 +1739,60 @@ public:
     }
 };
 
+class UBShapeStrokePreviewItem : public QGraphicsObject
+{
+public:
+    UBShapeStrokePreviewItem()
+    {
+        setAcceptedMouseButtons(Qt::NoButton);
+        setZValue(9999997.0); // below the handle and angle label
+    }
+
+    void setPreview(const QVector<QPointF>& points, const QPen& pen)
+    {
+        QPainterPath path;
+        if (!points.isEmpty())
+        {
+            path.moveTo(points.first());
+            for (int i = 1; i < points.size(); ++i)
+                path.lineTo(points.at(i));
+        }
+
+        // Must be called before the bounding rect changes so the scene
+        // removes the old rect from its BSP index.
+        prepareGeometryChange();
+        mPath = path;
+        mPen = pen;
+        update();
+    }
+
+    QRectF boundingRect() const override
+    {
+        const qreal margin = mPen.widthF() + 2.0;
+        return mPath.boundingRect().adjusted(-margin, -margin, margin, margin);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
+    {
+        // Overlay only: never render into PDF, thumbnails or podcast frames.
+        if (scene()
+                && static_cast<UBGraphicsScene*>(scene())->renderingContext()
+                        != UBGraphicsScene::Screen)
+        {
+            return;
+        }
+
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(mPen);
+        painter->setBrush(Qt::NoBrush);
+        painter->drawPath(mPath);
+    }
+
+private:
+    QPainterPath mPath;
+    QPen mPen;
+};
+
 class UBShapeAngleItem : public QGraphicsObject
 {
 public:
@@ -1777,20 +1864,126 @@ void UBGraphicsScene::drawShapePreview(const QPointF& pEndPoint, qreal pWidth)
     if (rect.width() < minimumSize && rect.height() < minimumSize)
         return;
 
+    const int shapeKind =
+            UBDrawingController::drawingController()->shapeKind();
     const QVector<QPointF> points = UBShapeGeometry::pointsForKind(
-            UBDrawingController::drawingController()->shapeKind(), dragRect, pWidth);
+            shapeKind, dragRect, pWidth);
 
-    addShapePolygonPoints(points, pWidth);
+    const int style = UBSettings::settings()->shapeStrokeStyle();
+    if (style == UBShapeStrokeStyleDashed || style == UBShapeStrokeStyleDotted)
+    {
+        // Cheap single-item preview while drawing; real pieces on release.
+        updateShapeStrokePreview(points, pWidth, style);
+        return;
+    }
+
+    removeShapeStrokePreview();
+    addShapeOutline(shapeKind, points, pWidth);
 }
 
-void UBGraphicsScene::addShapePolygonPoints(const QVector<QPointF>& points, qreal pWidth)
+void UBGraphicsScene::addShapeOutline(int kind, const QVector<QPointF>& points, qreal pWidth)
 {
-    for (int i = 0; i + 1 < points.size(); ++i)
+    const QVector<UBShapeGeometry::StrokePiece> pieces = UBShapeGeometry::styledSegments(
+            kind, points, pWidth, UBSettings::settings()->shapeStrokeStyle());
+
+    // Commit may run after a tool change, so force the Shape colors rather
+    // than relying on the currently active tool.
+    const QColor colorOnDark = UBSettings::settings()->shapeColor(true);
+    const QColor colorOnLight = UBSettings::settings()->shapeColor(false);
+    auto applyShapeColor = [this, &colorOnDark, &colorOnLight](UBGraphicsPolygonItem* item)
     {
-        UBGraphicsPolygonItem* polygonItem =
-                lineToPolygonItem(QLineF(points.at(i), points.at(i + 1)), pWidth);
-        addPolygonItemToCurrentStroke(polygonItem);
+        item->setColor(isDarkBackground() ? colorOnDark : colorOnLight);
+        item->setColorOnDarkBackground(colorOnDark);
+        item->setColorOnLightBackground(colorOnLight);
+    };
+
+    for (const UBShapeGeometry::StrokePiece& piece : pieces)
+    {
+        if (piece.dot)
+        {
+            // Minimal round dot polygon instead of a capsule with arc vertices.
+            const QPointF center = piece.line.center();
+            const qreal radius = piece.line.length() / 2.0;
+            constexpr int vertexCount = 8;
+
+            QPolygonF dot;
+            for (int i = 0; i < vertexCount; ++i)
+            {
+                const qreal angle = 2.0 * 3.14159265358979323846 * i / vertexCount;
+                dot << center + QPointF(radius * std::cos(angle),
+                                        radius * std::sin(angle));
+            }
+
+            UBGraphicsPolygonItem *polygonItem = new UBGraphicsPolygonItem(dot);
+            initPolygonItem(polygonItem);
+            applyShapeColor(polygonItem);
+            addPolygonItemToCurrentStroke(polygonItem);
+        }
+        else
+        {
+            UBGraphicsPolygonItem *polygonItem = lineToPolygonItem(piece.line, pWidth);
+            applyShapeColor(polygonItem);
+            addPolygonItemToCurrentStroke(polygonItem);
+        }
     }
+}
+
+void UBGraphicsScene::updateShapeStrokePreview(const QVector<QPointF>& points,
+                                               qreal width, int style)
+{
+    if (!mShapeStrokePreview)
+    {
+        mShapeStrokePreview = new UBShapeStrokePreviewItem();
+        QGraphicsScene::addItem(mShapeStrokePreview);
+    }
+
+    QPen pen(UBSettings::settings()->shapeColor(isDarkBackground()));
+    pen.setWidthF(width);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    pen.setDashPattern(style == UBShapeStrokeStyleDotted
+                       ? QVector<qreal>{1.0, 2.0}
+                       : QVector<qreal>{4.0, 3.0});
+    pen.setStyle(Qt::CustomDashLine);
+
+    static_cast<UBShapeStrokePreviewItem*>(mShapeStrokePreview)
+            ->setPreview(points, pen);
+}
+
+void UBGraphicsScene::removeShapeStrokePreview()
+{
+    if (!mShapeStrokePreview)
+        return;
+
+    QGraphicsObject* preview = mShapeStrokePreview;
+    mShapeStrokePreview = NULL; // never leave a dangling pointer
+
+    if (preview->scene() == this)
+        QGraphicsScene::removeItem(preview);
+
+    // Deferred: this can run inside an input event.
+    preview->deleteLater();
+}
+
+void UBGraphicsScene::finishShapeStrokePreview()
+{
+    if (!mShapeStrokePreview)
+        return;
+
+    UBDrawingController *dc = UBDrawingController::drawingController();
+    const int kind = dc->shapeKind();
+    const QRectF dragRect(mShapeStartPoint, mCurrentPoint);
+
+    qreal width = dc->currentToolWidth();
+    width /= UBApplication::boardController->systemScaleFactor();
+    width /= UBApplication::boardController->currentZoom();
+
+    const QVector<QPointF> points = UBShapeGeometry::pointsForKind(kind, dragRect, width);
+
+    removeShapeStrokePreview();
+
+    // Build the real dashed/dotted geometry once, on release.
+    addShapeOutline(kind, points, width);
 }
 
 void UBGraphicsScene::addPolygonItemToCurrentStroke(UBGraphicsPolygonItem* polygonItem)
@@ -1860,6 +2053,7 @@ void UBGraphicsScene::cancelShapePreview()
     mShapeHandleDragging = false;
     removeShapeHandle();
     removeShapeAngleLabel();
+    removeShapeStrokePreview();
 
     clearShapePreview();
 
@@ -1950,6 +2144,23 @@ void UBGraphicsScene::commitShapeEditing()
 {
     if (!mShapeEditing)
         return;
+
+    // Build the real geometry exactly once, with the current style. This
+    // covers the cheap handle-drag preview and style changes made while
+    // editing. Use the Shape width: a tool-change commit runs after the
+    // active tool has already switched.
+    qreal width = UBSettings::settings()->currentShapeWidth();
+    width /= UBApplication::boardController->systemScaleFactor();
+    width /= UBApplication::boardController->currentZoom();
+
+    const QVector<QPointF> points =
+            UBShapeGeometry::editableShapePoints(mShapeEditingKind,
+                                                 mShapeEditingDragRect,
+                                                 mShapeHandlePos);
+
+    removeShapeStrokePreview();
+    clearShapePreview();
+    addShapeOutline(mShapeEditingKind, points, width);
 
     mShapeEditing = false;
     mShapeHandleDragging = false;
@@ -3461,6 +3672,7 @@ void UBGraphicsScene::stylusToolChanged(int tool, int previousTool)
     if (tool != previousTool)
     {
         removeShapeAngleLabel();
+        removeShapeStrokePreview();
         hideTool();
 
         if (mShapeEditing)

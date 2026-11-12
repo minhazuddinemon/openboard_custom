@@ -709,6 +709,22 @@ int UBSettings::shapeKind()
 }
 
 
+int UBSettings::shapeStrokeStyle()
+{
+    return qBound(0, value("Board/ShapeStrokeStyle",
+                           UBShapeStrokeStyleSolid).toInt(),
+                  UBShapeStrokeStyleCount - 1);
+}
+
+
+void UBSettings::setShapeStrokeStyle(int style)
+{
+    style = qBound(0, style, UBShapeStrokeStyleCount - 1);
+    if (style != shapeStrokeStyle())
+        setValue("Board/ShapeStrokeStyle", style);
+}
+
+
 QList<int> UBSettings::shapeRecentKinds()
 {
     QList<int> result;

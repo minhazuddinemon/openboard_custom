@@ -46,6 +46,12 @@ constexpr int UBShapeLineKind = 15;
 // Number of Shape-tool kinds (0 = rectangle ... 17 = double arrow).
 constexpr int UBShapeKindCount = 18;
 
+// Shape stroke styles, persisted as Board/ShapeStrokeStyle.
+constexpr int UBShapeStrokeStyleSolid = 0;
+constexpr int UBShapeStrokeStyleDashed = 1;
+constexpr int UBShapeStrokeStyleDotted = 2;
+constexpr int UBShapeStrokeStyleCount = 3;
+
 // Diameter, in device-independent pixels, of the free-triangle apex handle.
 constexpr qreal ShapeHandleDiameter = 14.0;
 

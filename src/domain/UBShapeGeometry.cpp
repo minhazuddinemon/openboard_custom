@@ -22,6 +22,8 @@
 
 #include "core/UB.h"
 
+using UBShapeGeometry::StrokePiece;
+
 namespace
 {
 
@@ -245,6 +247,306 @@ QVector<QPointF> doubleArrowPoints(const QRectF& dragRect, qreal strokeWidth)
            << tipBack + barbOffset << tip << tipBack - barbOffset;
 
     return points;
+}
+
+constexpr qreal kDashLengthFactor = 4.0;
+constexpr qreal kDashGapFactor = 3.0;
+constexpr qreal kDotLengthFactor = 1.0;
+constexpr qreal kDotGapFactor = 2.0;
+constexpr qreal kCornerArmFactor = 1.5;
+
+constexpr qreal kMinDashLength = 4.0;
+constexpr qreal kMinDashGap = 3.0;
+constexpr qreal kMinDotLength = 1.5;
+constexpr qreal kMinDotGap = 2.5;
+constexpr qreal kMinCornerArm = 2.0;
+
+// Upper bound on the number of pieces generated for one shape. If a shape
+// would exceed it, the dash/gap lengths are enlarged.
+constexpr int kMaxStrokePieces = 380;
+
+constexpr qreal kCornerTurnDegrees = 30.0;
+constexpr qreal kCurveTurnEpsilon = 1.0;
+
+qreal distanceBetween(const QPointF& a, const QPointF& b)
+{
+    return std::hypot(b.x() - a.x(), b.y() - a.y());
+}
+
+QVector<qreal> cumulativeLengths(const QVector<QPointF>& points)
+{
+    QVector<qreal> cumulative;
+    cumulative.reserve(points.size());
+    cumulative << 0.0;
+    for (int i = 1; i < points.size(); ++i)
+        cumulative << cumulative.last() + distanceBetween(points.at(i - 1), points.at(i));
+    return cumulative;
+}
+
+QPointF pointAtDistance(const QVector<QPointF>& points,
+                        const QVector<qreal>& cumulative, qreal distance)
+{
+    if (points.isEmpty())
+        return QPointF();
+    if (points.size() == 1)
+        return points.first();
+
+    distance = qBound<qreal>(0.0, distance, cumulative.last());
+
+    int index = 1;
+    while (index < cumulative.size() - 1 && cumulative.at(index) < distance)
+        ++index;
+
+    const qreal segmentStart = cumulative.at(index - 1);
+    const qreal segmentLength = cumulative.at(index) - segmentStart;
+    if (segmentLength <= 0.0)
+        return points.at(index);
+
+    const qreal t = (distance - segmentStart) / segmentLength;
+    const QPointF a = points.at(index - 1);
+    const QPointF b = points.at(index);
+    return a + (b - a) * t;
+}
+
+void emitSolidEdges(const QVector<QPointF>& points, QVector<StrokePiece>& pieces)
+{
+    for (int i = 0; i + 1 < points.size(); ++i)
+        pieces << StrokePiece{QLineF(points.at(i), points.at(i + 1)), false};
+}
+
+// Fits a symmetric dash/dot pattern to an open run: it starts and ends with
+// a dash (or dot) and the gap is adjusted slightly so no dash is cut off.
+void emitFittedRun(const QVector<QPointF>& points, qreal dash, qreal gap,
+                   bool dots, QVector<StrokePiece>& pieces)
+{
+    if (points.size() < 2)
+        return;
+
+    const QVector<qreal> cumulative = cumulativeLengths(points);
+    const qreal total = cumulative.last();
+
+    if (total < 2.0 * dash + gap)
+    {
+        emitSolidEdges(points, pieces);
+        return;
+    }
+
+    const int count = int(std::floor((total + gap) / (dash + gap)));
+    const qreal fittedGap = (count > 1) ? (total - count * dash) / (count - 1) : 0.0;
+    if (count < 2 || fittedGap <= 0.0)
+    {
+        emitSolidEdges(points, pieces);
+        return;
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        const qreal start = i * (dash + fittedGap);
+        pieces << StrokePiece{QLineF(pointAtDistance(points, cumulative, start),
+                                     pointAtDistance(points, cumulative, start + dash)),
+                              dots};
+    }
+}
+
+// Continuous pattern around a closed loop; spacing is fitted so it closes
+// exactly without a partial dash.
+void emitFittedLoop(const QVector<QPointF>& points, qreal dash, qreal gap,
+                    bool dots, QVector<StrokePiece>& pieces)
+{
+    if (points.size() < 2)
+        return;
+
+    const QVector<qreal> cumulative = cumulativeLengths(points);
+    const qreal total = cumulative.last();
+
+    if (total < 2.0 * (dash + gap))
+    {
+        emitSolidEdges(points, pieces);
+        return;
+    }
+
+    const int count = int(std::floor(total / (dash + gap)));
+    const qreal fittedGap = (count > 0) ? (total - count * dash) / count : 0.0;
+    if (count < 2 || fittedGap <= 0.0)
+    {
+        emitSolidEdges(points, pieces);
+        return;
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        const qreal start = i * (dash + fittedGap);
+        pieces << StrokePiece{QLineF(pointAtDistance(points, cumulative, start),
+                                     pointAtDistance(points, cumulative, start + dash)),
+                              dots};
+    }
+}
+
+QVector<QPointF> uniqueVertices(const QVector<QPointF>& outline, bool* closed)
+{
+    QVector<QPointF> vertices = outline;
+    *closed = (outline.size() > 1
+               && distanceBetween(outline.first(), outline.last()) < 0.001);
+    if (*closed)
+        vertices.removeLast();
+    return vertices;
+}
+
+void computeEdges(const QVector<QPointF>& vertices, bool closed,
+                  QVector<qreal>& lengths, QVector<QPointF>& directions)
+{
+    const int count = vertices.size();
+    lengths = QVector<qreal>(count, 0.0);
+    directions = QVector<QPointF>(count);
+
+    for (int i = 0; i < count; ++i)
+    {
+        const int next = (i + 1) % count;
+        if (!closed && i + 1 >= count)
+            continue;
+
+        const QPointF a = vertices.at(i);
+        const QPointF b = vertices.at(next);
+        const qreal length = distanceBetween(a, b);
+        lengths[i] = length;
+        directions[i] = (length > 0.0) ? (b - a) / length : QPointF();
+    }
+}
+
+qreal turnDegrees(const QPointF& previousDirection, const QPointF& nextDirection)
+{
+    const qreal dot = qBound<qreal>(-1.0,
+                                    QPointF::dotProduct(previousDirection,
+                                                        nextDirection), 1.0);
+    return std::acos(dot) * 180.0 / kPi;
+}
+
+// Closed polygon with sharp corners: a solid L wraps each corner, the rest of
+// each side is fitted with the pattern.
+void emitCornerPolygon(const QVector<QPointF>& outline, qreal armLength,
+                       qreal dash, qreal gap, bool dots,
+                       QVector<StrokePiece>& pieces)
+{
+    bool closed = false;
+    const QVector<QPointF> vertices = uniqueVertices(outline, &closed);
+    if (vertices.size() < 3)
+    {
+        emitSolidEdges(outline, pieces);
+        return;
+    }
+
+    const int count = vertices.size();
+    QVector<qreal> edgeLength;
+    QVector<QPointF> edgeDirection;
+    computeEdges(vertices, true, edgeLength, edgeDirection);
+
+    QVector<bool> corner(count, false);
+    QVector<qreal> armIn(count, 0.0);
+    QVector<qreal> armOut(count, 0.0);
+
+    for (int i = 0; i < count; ++i)
+    {
+        const int previous = (i - 1 + count) % count;
+        const qreal turn = turnDegrees(edgeDirection.at(previous),
+                                       edgeDirection.at(i));
+        if (turn > kCornerTurnDegrees && edgeLength.at(previous) > 0.0
+                && edgeLength.at(i) > 0.0)
+        {
+            corner[i] = true;
+            armIn[i] = qMin(armLength, 0.45 * edgeLength.at(previous));
+            armOut[i] = qMin(armLength, 0.45 * edgeLength.at(i));
+        }
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        if (!corner.at(i))
+            continue;
+
+        const int previous = (i - 1 + count) % count;
+        const QPointF vertex = vertices.at(i);
+        if (armIn.at(i) > 0.0)
+            pieces << StrokePiece{
+                    QLineF(vertex - edgeDirection.at(previous) * armIn.at(i),
+                           vertex), false};
+        if (armOut.at(i) > 0.0)
+            pieces << StrokePiece{
+                    QLineF(vertex, vertex + edgeDirection.at(i) * armOut.at(i)),
+                    false};
+    }
+
+    for (int i = 0; i < count; ++i)
+    {
+        const int next = (i + 1) % count;
+        const qreal trimStart = armOut.at(i);
+        const qreal trimEnd = armIn.at(next);
+        const qreal span = edgeLength.at(i) - trimStart - trimEnd;
+        if (span <= 0.0)
+            continue;
+
+        QVector<QPointF> run;
+        run << vertices.at(i) + edgeDirection.at(i) * trimStart
+            << vertices.at(next) - edgeDirection.at(i) * trimEnd;
+        emitFittedRun(run, dash, gap, dots, pieces);
+    }
+}
+
+// Rounded rectangle/square: the sampled curved corners are solid, the straight
+// sides are fitted with the pattern.
+void emitRoundedBox(const QVector<QPointF>& outline, qreal dash, qreal gap,
+                    bool dots, QVector<StrokePiece>& pieces)
+{
+    bool closed = false;
+    const QVector<QPointF> vertices = uniqueVertices(outline, &closed);
+    if (vertices.size() < 3)
+    {
+        emitSolidEdges(outline, pieces);
+        return;
+    }
+
+    const int count = vertices.size();
+    QVector<qreal> edgeLength;
+    QVector<QPointF> edgeDirection;
+    computeEdges(vertices, true, edgeLength, edgeDirection);
+
+    QVector<bool> curvedEdge(count, false);
+    for (int i = 0; i < count; ++i)
+    {
+        const int previous = (i - 1 + count) % count;
+        if (turnDegrees(edgeDirection.at(previous), edgeDirection.at(i))
+                > kCurveTurnEpsilon)
+        {
+            curvedEdge[i] = true;
+            curvedEdge[previous] = true;
+        }
+    }
+
+    int index = 0;
+    while (index < count)
+    {
+        if (curvedEdge.at(index))
+        {
+            while (index < count && curvedEdge.at(index))
+            {
+                pieces << StrokePiece{QLineF(vertices.at(index),
+                                             vertices.at((index + 1) % count)),
+                                      false};
+                ++index;
+            }
+        }
+        else
+        {
+            const int start = index;
+            QVector<QPointF> run;
+            run << vertices.at(start);
+            while (index < count && !curvedEdge.at(index))
+            {
+                run << vertices.at((index + 1) % count);
+                ++index;
+            }
+            emitFittedRun(run, dash, gap, dots, pieces);
+        }
+    }
 }
 
 } // namespace
@@ -544,6 +846,82 @@ QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect, qreal strokeWid
         kind = 0;
 
     return sShapes.at(kind).points(dragRect);
+}
+
+QVector<StrokePiece> styledSegments(int kind, const QVector<QPointF>& outline,
+                                    qreal strokeWidth, int style)
+{
+    QVector<StrokePiece> pieces;
+
+    if (style != UBShapeStrokeStyleDashed && style != UBShapeStrokeStyleDotted)
+    {
+        emitSolidEdges(outline, pieces);
+        return pieces;
+    }
+
+    if (outline.size() < 2)
+        return pieces;
+
+    const bool dotted = (style == UBShapeStrokeStyleDotted);
+    qreal dash = dotted
+            ? qMax(strokeWidth * kDotLengthFactor, kMinDotLength)
+            : qMax(strokeWidth * kDashLengthFactor, kMinDashLength);
+    qreal gap = dotted
+            ? qMax(strokeWidth * kDotGapFactor, kMinDotGap)
+            : qMax(strokeWidth * kDashGapFactor, kMinDashGap);
+
+    // Bound the piece count on very large shapes by enlarging the pattern.
+    qreal outlineLength = 0.0;
+    for (int i = 1; i < outline.size(); ++i)
+        outlineLength += distanceBetween(outline.at(i - 1), outline.at(i));
+    const int estimate = int(outlineLength / (dash + gap));
+    if (estimate > kMaxStrokePieces)
+    {
+        const qreal scale = qreal(estimate) / kMaxStrokePieces;
+        dash *= scale;
+        gap *= scale;
+    }
+
+    if (kind == 1 || kind == 2)
+    {
+        emitFittedLoop(outline, dash, gap, dotted, pieces);
+        return pieces;
+    }
+
+    if (kind == kRoundedRectangleKind || kind == kRoundedSquareKind)
+    {
+        emitRoundedBox(outline, dash, gap, dotted, pieces);
+        return pieces;
+    }
+
+    if (kind == UBShapeLineKind)
+    {
+        emitFittedRun(outline, dash, gap, dotted, pieces);
+        return pieces;
+    }
+
+    if (kind == kArrowKind || kind == kDoubleArrowKind)
+    {
+        const int shaftEdge = (kind == kArrowKind) ? 0 : 4;
+        for (int i = 0; i + 1 < outline.size(); ++i)
+        {
+            if (i == shaftEdge)
+            {
+                QVector<QPointF> shaft;
+                shaft << outline.at(i) << outline.at(i + 1);
+                emitFittedRun(shaft, dash, gap, dotted, pieces);
+            }
+            else
+            {
+                pieces << StrokePiece{QLineF(outline.at(i), outline.at(i + 1)), false};
+            }
+        }
+        return pieces;
+    }
+
+    const qreal armLength = qMax(strokeWidth * kCornerArmFactor, kMinCornerArm);
+    emitCornerPolygon(outline, armLength, dash, gap, dotted, pieces);
+    return pieces;
 }
 
 QString nameForKind(int kind)

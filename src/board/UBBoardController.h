@@ -354,6 +354,7 @@ class UBBoardController : public UBDocumentContainer
         void eraserToolChanged(int tool);
         void shapeKindActionActivated(int index);
         void shapeGroupActionActivated(int index);
+        void setShapeStrokeStyle(int index);
         void shapeToolChanged(int tool);
         void showShapePicker();
         void undoWithShapeCommit();

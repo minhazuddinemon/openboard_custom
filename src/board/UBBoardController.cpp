@@ -315,6 +315,30 @@ QIcon createShapeKindIcon(int kind)
     return QIcon(pixmap);
 }
 
+QIcon createShapeStrokeStyleIcon(int style)
+{
+    constexpr int iconSize = 32;
+
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor ink = QApplication::palette().color(QPalette::Text);
+    QPen pen(ink, 2.0, Qt::SolidLine, Qt::RoundCap);
+    if (style == UBShapeStrokeStyleDashed)
+        pen.setStyle(Qt::DashLine);
+    else if (style == UBShapeStrokeStyleDotted)
+        pen.setStyle(Qt::DotLine);
+
+    painter.setPen(pen);
+    painter.drawLine(QPointF(6.0, iconSize / 2.0),
+                     QPointF(iconSize - 6.0, iconSize / 2.0));
+
+    return QIcon(pixmap);
+}
+
 QIcon createMoreShapesIcon()
 {
     constexpr int iconSize = 32;
@@ -803,8 +827,43 @@ void UBBoardController::setupToolbar()
     updateShapeRecentActions();
     shapeToolChanged(UBDrawingController::drawingController()->stylusTool());
 
+    //-----------------------------------------------------------//
+    // Setup shape stroke style group (solid / dashed / dotted).
+
+    QAction *solidStyle = new QAction(tr("Solid"), mMainWindow->boardToolBar);
+    solidStyle->setCheckable(true);
+    solidStyle->setToolTip(tr("Solid outline"));
+    solidStyle->setIcon(createShapeStrokeStyleIcon(UBShapeStrokeStyleSolid));
+
+    QAction *dashedStyle = new QAction(tr("Dashed"), mMainWindow->boardToolBar);
+    dashedStyle->setCheckable(true);
+    dashedStyle->setToolTip(tr("Dashed outline"));
+    dashedStyle->setIcon(createShapeStrokeStyleIcon(UBShapeStrokeStyleDashed));
+
+    QAction *dottedStyle = new QAction(tr("Dotted"), mMainWindow->boardToolBar);
+    dottedStyle->setCheckable(true);
+    dottedStyle->setToolTip(tr("Dotted outline"));
+    dottedStyle->setIcon(createShapeStrokeStyleIcon(UBShapeStrokeStyleDotted));
+
+    QList<QAction *> styleActions;
+    styleActions << solidStyle << dashedStyle << dottedStyle;
+
+    UBToolbarButtonGroup *styleChoice =
+            new UBToolbarButtonGroup(mMainWindow->boardToolBar, styleActions, "shapeStyle");
+    styleChoice->setLabel(tr("Style"));
+
+    connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), styleChoice, SLOT(displayText(QVariant)));
+    connect(styleChoice, SIGNAL(activated(int)), this, SLOT(setShapeStrokeStyle(int)));
+
+    styleChoice->displayText(QVariant(false));
+
+    const int initialStrokeStyle = UBSettings::settings()->shapeStrokeStyle();
+    styleChoice->setCurrentIndex(initialStrokeStyle);
+    styleActions.at(initialStrokeStyle)->setChecked(true);
+
     mMainWindow->boardToolBar->insertSeparator(mMainWindow->actionBackgrounds);
     mMainWindow->boardToolBar->insertWidget(mMainWindow->actionBackgrounds, shapeChoice);
+    mMainWindow->boardToolBar->insertWidget(mMainWindow->actionBackgrounds, styleChoice);
     mMainWindow->boardToolBar->insertSeparator(mMainWindow->actionBackgrounds);
 
     //-----------------------------------------------------------//
@@ -2902,6 +2961,12 @@ void UBBoardController::updateShapeRecentActions()
             action->setVisible(false);
         }
     }
+}
+
+
+void UBBoardController::setShapeStrokeStyle(int index)
+{
+    UBSettings::settings()->setShapeStrokeStyle(index);
 }
 
 

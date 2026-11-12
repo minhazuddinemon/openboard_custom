@@ -424,11 +424,14 @@ signals:
 
         void clearShapePreview();
         void cancelShapePreview();
-        void addShapePolygonPoints(const QVector<QPointF>& points, qreal pWidth);
+        void addShapeOutline(int kind, const QVector<QPointF>& points, qreal pWidth);
         void updateShapeHandle();
         void removeShapeHandle();
         void updateShapeAngleLabel(const QPointF& scenePos, qreal angle);
         void removeShapeAngleLabel();
+        void updateShapeStrokePreview(const QVector<QPointF>& points, qreal width, int style);
+        void removeShapeStrokePreview();
+        void finishShapeStrokePreview();
         bool isPointOnShapeHandle(const QPointF& scenePos) const;
 
         void initPolygonItem(UBGraphicsPolygonItem*);
@@ -544,6 +547,7 @@ signals:
         QPointF mShapeHandlePos;
         QGraphicsItem* mShapeHandle;
         QGraphicsObject* mShapeAngleLabel;
+        QGraphicsObject* mShapeStrokePreview;
 
         QSet<QGraphicsItem*> mTools;
 
