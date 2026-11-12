@@ -306,6 +306,7 @@ class UBBoardController : public UBDocumentContainer
         int mSwitchToSceneIndex{-1};
         UBBoardPaletteManager *mPaletteManager;
         UBToolbarButtonGroup *mEraserWidthChoice;
+        UBToolbarButtonGroup *mShapeChoice;
         int mStrokeEraserActionIndex;
         UBSoftwareUpdateDialog *mSoftwareUpdateDialog;
         UBMessageWindow *mMessageWindow;
@@ -345,6 +346,10 @@ class UBBoardController : public UBDocumentContainer
         void updateWidthButtonIcons();
         void eraserWidthActionActivated(int index);
         void eraserToolChanged(int tool);
+        void shapeKindActionActivated(int index);
+        void shapeToolChanged(int tool);
+        void undoWithShapeCommit();
+        void redoWithShapeCommit();
         void libraryDialogClosed(int ret);
         void lastWindowClosed();
         void onDownloadModalFinished();

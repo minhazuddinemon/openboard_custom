@@ -102,22 +102,68 @@ QCursor strokeEraserCursor()
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
 
+    const qreal center = cursorSize / 2.0;
+    const qreal offset = (cursorSize - StrokeEraserCircleDiameter) / 2.0;
+    const QRectF circle(offset, offset,
+                        StrokeEraserCircleDiameter, StrokeEraserCircleDiameter);
+
     // White halo makes the dot visible on dark boards; black ring on light ones.
     painter.setPen(QPen(Qt::white, 3.0));
     painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0));
+    painter.drawEllipse(circle);
 
     painter.setPen(QPen(Qt::black, 1.5));
-    painter.drawEllipse(QRectF(3.0, 3.0, 10.0, 10.0));
+    painter.drawEllipse(circle);
 
     // Small precision crosshair ticks.
     painter.setPen(QPen(Qt::black, 1.0));
-    painter.drawLine(QPointF(8.0, 0.0), QPointF(8.0, 3.0));
-    painter.drawLine(QPointF(8.0, 13.0), QPointF(8.0, 16.0));
-    painter.drawLine(QPointF(0.0, 8.0), QPointF(3.0, 8.0));
-    painter.drawLine(QPointF(13.0, 8.0), QPointF(16.0, 8.0));
+    painter.drawLine(QPointF(center, 0.0), QPointF(center, offset));
+    painter.drawLine(QPointF(center, cursorSize - offset), QPointF(center, cursorSize));
+    painter.drawLine(QPointF(0.0, center), QPointF(offset, center));
+    painter.drawLine(QPointF(cursorSize - offset, center), QPointF(cursorSize, center));
 
     return QCursor(pixmap, cursorSize / 2, cursorSize / 2);
+}
+
+QCursor shapeCursor(qreal devicePixelRatio)
+{
+    constexpr int logicalSize = 24;
+    const qreal dpr = (devicePixelRatio > 0.0) ? devicePixelRatio : 1.0;
+
+    QPixmap pixmap(qRound(logicalSize * dpr), qRound(logicalSize * dpr));
+    pixmap.fill(Qt::transparent);
+    pixmap.setDevicePixelRatio(dpr);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QPointF center(logicalSize / 2.0, logicalSize / 2.0);
+    const QColor dark(20, 20, 20, 235);
+    const QColor light(255, 255, 255, 235);
+
+    const QLineF arms[4] = {
+        QLineF(center.x(), center.y() - 5.0, center.x(), center.y() - 10.0),
+        QLineF(center.x(), center.y() + 5.0, center.x(), center.y() + 10.0),
+        QLineF(center.x() - 5.0, center.y(), center.x() - 10.0, center.y()),
+        QLineF(center.x() + 5.0, center.y(), center.x() + 10.0, center.y())
+    };
+
+    // Dark outline first, light fill on top, so it works on dark and light pages.
+    painter.setPen(QPen(dark, 3.0, Qt::SolidLine, Qt::RoundCap));
+    for (const QLineF& arm : arms)
+        painter.drawLine(arm);
+    painter.setPen(QPen(dark, 2.6));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(center, 2.6, 2.6);
+
+    painter.setPen(QPen(light, 1.4, Qt::SolidLine, Qt::RoundCap));
+    for (const QLineF& arm : arms)
+        painter.drawLine(arm);
+    painter.setPen(QPen(light, 1.2));
+    painter.setBrush(light);
+    painter.drawEllipse(center, 1.2, 1.2);
+
+    return QCursor(pixmap, logicalSize / 2, logicalSize / 2);
 }
 
 } // namespace
@@ -2180,6 +2226,9 @@ void UBBoardView::setToolCursor (int tool)
         break;
     case UBStylusTool::Line:
         controlViewport->setCursor (UBResources::resources ()->penCursor);
+        break;
+    case UBStylusTool::Shape:
+        controlViewport->setCursor (shapeCursor(controlViewport->devicePixelRatioF()));
         break;
     case UBStylusTool::Text:
         controlViewport->setCursor (UBResources::resources ()->textCursor);

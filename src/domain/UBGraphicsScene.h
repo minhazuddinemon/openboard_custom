@@ -210,6 +210,11 @@ class UBGraphicsScene: public UBCoreGraphicsScene, public UBItem, public std::en
         void drawArcTo(const QPointF& pCenterPoint, qreal pSpanAngle);
         void drawCurve(const QList<QPair<QPointF, qreal> > &points);
         void drawCurve(const QList<QPointF>& points, qreal startWidth, qreal endWidth);
+        void drawShapePreview(const QPointF& pEndPoint, qreal pWidth);
+
+        // Finalizes an in-progress free triangle through the normal
+        // inputDeviceRelease() commit path.
+        void commitShapeEditing();
 
         bool isEmpty() const;
 
@@ -416,6 +421,15 @@ signals:
         UBGraphicsPolygonItem* curveToPolygonItem(const QList<QPointF> &points, qreal startWidth, qreal endWidth);
         void addPolygonItemToCurrentStroke(UBGraphicsPolygonItem* polygonItem);
 
+        void clearShapePreview();
+        void cancelShapePreview();
+        void addShapePolygonPoints(const QVector<QPointF>& points, qreal pWidth);
+        void updateShapeHandle();
+        void removeShapeHandle();
+        void updateShapeStartMarker();
+        void removeShapeStartMarker();
+        bool isPointOnShapeHandle(const QPointF& scenePos) const;
+
         void initPolygonItem(UBGraphicsPolygonItem*);
 
         QGraphicsItem* strokeErasableItemFor(QGraphicsItem* item) const;
@@ -518,6 +532,17 @@ signals:
         SceneViewState mViewState;
 
         bool mInputDeviceIsPressed;
+
+        QPointF mShapeStartPoint;
+        bool mShapeGestureActive;
+        bool mShapeEditing;
+        bool mShapeApexDragging;
+        bool mShapeForceCommit;
+        QPointF mShapeBaseStart;
+        QPointF mShapeBaseEnd;
+        QPointF mShapeApex;
+        QGraphicsItem* mShapeHandle;
+        QGraphicsItem* mShapeStartMarker;
 
         QSet<QGraphicsItem*> mTools;
 

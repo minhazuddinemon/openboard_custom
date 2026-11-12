@@ -61,6 +61,10 @@ class UBDrawingController : public QObject
         QColor currentToolColor();
         QColor toolColor(bool onDarkBackground);
 
+        // Last used shape kind (0 = rectangle, 1 = ellipse).
+        int shapeKind();
+        void setShapeKind(int kind);
+
         // Indices of the two recent custom-color slots (toolbar slots 6 and 7).
         static constexpr int CustomColorStartIndex = 5;
         static constexpr int CustomColorCount = 2;
@@ -103,6 +107,7 @@ class UBDrawingController : public QObject
         void setStylusTool(int tool);
         void setLassoMode();
         void setLaserMode();
+        void setShapeMode();
         void setLineWidthIndex(int index);
         void setColorIndex(int index);
         void setEraserWidthIndex(int index);

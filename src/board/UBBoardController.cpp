@@ -60,6 +60,7 @@
 #include "document/UBDocumentProxy.h"
 
 #include "domain/UBGraphicsGroupContainerItem.h"
+#include "domain/UBShapeGeometry.h"
 #include "domain/UBGraphicsItemUndoCommand.h"
 #include "domain/UBGraphicsMediaItem.h"
 #include "domain/UBGraphicsPDFItem.h"
@@ -216,6 +217,54 @@ QIcon createStrokeEraserIcon()
     return QIcon(pixmap);
 }
 
+QIcon createShapeKindIcon(int kind)
+{
+    constexpr int iconSize = 32;
+    constexpr qreal margin = 4.0;
+
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor ink = QApplication::palette().color(QPalette::Text);
+    painter.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    // Use the same geometry as the board. A slightly wide box keeps the ellipse
+    // icon distinguishable from the circle icon.
+    QPolygonF polygon;
+    const QRectF iconDragRect = (kind == 12)
+            ? QRectF(0.0, 0.72, 1.0, 0.0)   // horizontal base for the free triangle
+            : QRectF(0.0, 0.0, 1.0, 0.72);
+    const QVector<QPointF> shape = UBShapeGeometry::pointsForKind(kind, iconDragRect);
+    for (const QPointF& point : shape)
+        polygon << point;
+
+    if (!polygon.isEmpty())
+    {
+        const QRectF bounds = polygon.boundingRect();
+        const qreal available = iconSize - 2.0 * margin;
+        const qreal scale = (bounds.width() > 0.0 && bounds.height() > 0.0)
+                ? qMin(available / bounds.width(), available / bounds.height())
+                : 1.0;
+        const QPointF offset((iconSize - bounds.width() * scale) / 2.0 - bounds.left() * scale,
+                             (iconSize - bounds.height() * scale) / 2.0 - bounds.top() * scale);
+
+        for (int i = 0; i < polygon.size(); ++i)
+        {
+            const QPointF point = polygon.at(i);
+            polygon[i] = QPointF(offset.x() + point.x() * scale,
+                                 offset.y() + point.y() * scale);
+        }
+
+        painter.drawPolygon(polygon);
+    }
+
+    return QIcon(pixmap);
+}
+
 } // namespace
 
 UBBoardController::UBBoardController(UBMainWindow* mainWindow)
@@ -225,6 +274,7 @@ UBBoardController::UBBoardController(UBMainWindow* mainWindow)
     , mActiveSceneIndex(-1)
     , mPaletteManager(0)
     , mEraserWidthChoice(nullptr)
+    , mShapeChoice(nullptr)
     , mStrokeEraserActionIndex(-1)
     , mSoftwareUpdateDialog(0)
     , mMessageWindow(0)
@@ -623,6 +673,39 @@ void UBBoardController::setupToolbar()
 
     updateWidthButtonIcons();
 
+    //-----------------------------------------------------------//
+    // Setup shape kind choice widget (one button per shape kind).
+
+    QList<QAction *> shapeActions;
+    const QVector<UBShapeGeometry::ShapeDefinition>& shapeDefinitions =
+            UBShapeGeometry::shapes();
+
+    for (const UBShapeGeometry::ShapeDefinition& definition : shapeDefinitions)
+    {
+        const QString name = UBShapeGeometry::nameForKind(definition.kind);
+
+        QAction *action = new QAction(name, mMainWindow->boardToolBar);
+        action->setCheckable(true);
+        action->setToolTip(tr("Draw: %1").arg(name));
+        action->setIcon(createShapeKindIcon(definition.kind));
+        shapeActions << action;
+    }
+
+    UBToolbarButtonGroup *shapeChoice =
+            new UBToolbarButtonGroup(mMainWindow->boardToolBar, shapeActions, "shape");
+    shapeChoice->setLabel(tr("Shape"));
+    mShapeChoice = shapeChoice;
+
+    connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), shapeChoice, SLOT(displayText(QVariant)));
+    connect(shapeChoice, SIGNAL(activated(int)), this, SLOT(shapeKindActionActivated(int)));
+    connect(UBDrawingController::drawingController(), SIGNAL(stylusToolChanged(int, int))
+            , this, SLOT(shapeToolChanged(int)));
+
+    shapeChoice->displayText(QVariant(false));
+    shapeToolChanged(UBDrawingController::drawingController()->stylusTool());
+
+    mMainWindow->boardToolBar->insertSeparator(mMainWindow->actionBackgrounds);
+    mMainWindow->boardToolBar->insertWidget(mMainWindow->actionBackgrounds, shapeChoice);
     mMainWindow->boardToolBar->insertSeparator(mMainWindow->actionBackgrounds);
 
     //-----------------------------------------------------------//
@@ -666,8 +749,8 @@ void UBBoardController::connectToolbar()
     connect(mMainWindow->actionEraseAnnotations, SIGNAL(triggered()), this, SLOT(clearSceneAnnotation()));
     connect(mMainWindow->actionEraseBackground,SIGNAL(triggered()),this,SLOT(clearSceneBackground()));
 
-    connect(mMainWindow->actionUndo, SIGNAL(triggered()), UBApplication::undoStack, SLOT(undo()));
-    connect(mMainWindow->actionRedo, SIGNAL(triggered()), UBApplication::undoStack, SLOT(redo()));
+    connect(mMainWindow->actionUndo, SIGNAL(triggered()), this, SLOT(undoWithShapeCommit()));
+    connect(mMainWindow->actionRedo, SIGNAL(triggered()), this, SLOT(redoWithShapeCommit()));
     connect(mMainWindow->actionRedo, SIGNAL(triggered()), this, SLOT(startScript()));
     connect(mMainWindow->actionBack, SIGNAL( triggered()), this, SLOT(previousScene()));
     connect(mMainWindow->actionForward, SIGNAL(triggered()), this, SLOT(nextScene()));
@@ -685,6 +768,24 @@ void UBBoardController::startScript()
 void UBBoardController::stopScript()
 {
     freezeW3CWidgets(true);
+}
+
+void UBBoardController::undoWithShapeCommit()
+{
+    if (mActiveScene)
+        mActiveScene->commitShapeEditing();
+
+    if (UBApplication::undoStack)
+        UBApplication::undoStack->undo();
+}
+
+void UBBoardController::redoWithShapeCommit()
+{
+    if (mActiveScene)
+        mActiveScene->commitShapeEditing();
+
+    if (UBApplication::undoStack)
+        UBApplication::undoStack->redo();
 }
 
 void UBBoardController::saveData(SaveFlags fls)
@@ -1945,6 +2046,10 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
     UBApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
     persistViewPositionOnCurrentScene();
 
+    // Finalize an in-progress free triangle before leaving the page.
+    if (mActiveScene)
+        mActiveScene->commitShapeEditing();
+
     bool documentChange = selectedDocument() != pDocumentProxy;
 
     int index = pSceneIndex;
@@ -2387,8 +2492,14 @@ void UBBoardController::setColorIndex(int pColorIndex)
 
     UBDrawingController::drawingController()->setColorIndex(pColorIndex);
 
+    // The Shape tool owns its selected colour index; selecting a swatch while
+    // it is active must not update the Pen colour caches or emit penColorChanged.
+    if (UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Shape)
+        return;
+
     if (UBDrawingController::drawingController()->stylusTool() != UBStylusTool::Marker &&
             UBDrawingController::drawingController()->stylusTool() != UBStylusTool::Line &&
+            UBDrawingController::drawingController()->stylusTool() != UBStylusTool::Shape &&
             UBDrawingController::drawingController()->stylusTool() != UBStylusTool::Text &&
             UBDrawingController::drawingController()->stylusTool() != UBStylusTool::Selector)
     {
@@ -2397,6 +2508,7 @@ void UBBoardController::setColorIndex(int pColorIndex)
 
     if (UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Pen ||
             UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Line ||
+            UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Shape ||
             UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Text ||
             UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Selector)
     {
@@ -2532,11 +2644,12 @@ void UBBoardController::showWidthSliderPopup(QAction *anchorAction, bool lineWid
 void UBBoardController::updateWidthButtonIcons()
 {
     UBSettings *settings = UBSettings::settings();
-    const bool markerActive =
-            UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Marker;
+    const UBStylusTool::Enum tool = (UBStylusTool::Enum)
+            UBDrawingController::drawingController()->stylusTool();
 
-    const qreal lineWidth = markerActive ? settings->markerStrongWidth()
-                                         : settings->penStrongWidth();
+    const qreal lineWidth = tool == UBStylusTool::Marker ? settings->markerStrongWidth()
+                         : tool == UBStylusTool::Shape  ? settings->shapeStrongWidth()
+                                                        : settings->penStrongWidth();
     mMainWindow->actionLineLarge->setIcon(createLineWidthIcon(lineWidth));
     mMainWindow->actionLineLarge->setToolTip(tr("Custom Line Width (%1 px)").arg(qRound(lineWidth)));
 
@@ -2568,6 +2681,35 @@ void UBBoardController::eraserToolChanged(int tool)
         mEraserWidthChoice->setCurrentIndex(UBSettings::settings()->eraserWidthIndex());
     else if (mEraserWidthChoice->currentIndex() == mStrokeEraserActionIndex)
         mEraserWidthChoice->clearSelection();
+}
+
+
+void UBBoardController::shapeKindActionActivated(int index)
+{
+    if (index < 0 || index >= UBShapeGeometry::shapeKindCount())
+        return;
+
+    UBDrawingController* drawingController = UBDrawingController::drawingController();
+
+    // Changing the shape kind while the free triangle is being edited finalizes
+    // the current triangle first.
+    if (drawingController->stylusTool() == UBStylusTool::Shape && mActiveScene)
+        mActiveScene->commitShapeEditing();
+
+    drawingController->setShapeKind(index);
+}
+
+
+void UBBoardController::shapeToolChanged(int tool)
+{
+    if (!mShapeChoice)
+        return;
+
+    if (tool == UBStylusTool::Shape)
+        mShapeChoice->setCurrentIndex(qBound(0, UBSettings::settings()->shapeKind(),
+                                             UBShapeGeometry::shapeKindCount() - 1));
+    else
+        mShapeChoice->clearSelection();
 }
 
 
@@ -2606,6 +2748,12 @@ void UBBoardController::show()
 
 void UBBoardController::persistCurrentScene(bool isAnAutomaticBackup, bool forceImmediateSave)
 {
+    // Finalize an in-progress free triangle before a real save/page/close
+    // boundary. Automatic backups leave the editing state untouched; the
+    // preview polygons are ordinary stroke polygons and serialize safely.
+    if (!isAnAutomaticBackup && mActiveScene)
+        mActiveScene->commitShapeEditing();
+
     if(UBPersistenceManager::persistenceManager()
             && selectedDocument() && mActiveScene && mActiveSceneIndex != mDeletingSceneIndex
             && (mActiveSceneIndex >= 0) && mActiveSceneIndex != mMovingSceneIndex)

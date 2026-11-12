@@ -279,6 +279,11 @@ void UBSettings::init()
     boardPenMediumWidth = new UBSetting(this, "Board", "PenMediumWidth", 3.0);
     boardPenStrongWidth = new UBSetting(this, "Board", "PenStrongWidth", 8.0);
 
+    boardShapeFineWidth = new UBSetting(this, "Board", "ShapeFineWidth", 1.5);
+    boardShapeMediumWidth = new UBSetting(this, "Board", "ShapeMediumWidth", 3.0);
+    boardShapeStrongWidth = new UBSetting(this, "Board", "ShapeStrongWidth", 8.0);
+    boardShapeLastKind = new UBSetting(this, "Board", "ShapeLastKind", 0);
+
     boardMarkerFineWidth = new UBSetting(this, "Board", "MarkerFineWidth", 12.0);
     boardMarkerMediumWidth = new UBSetting(this, "Board", "MarkerMediumWidth", 24.0);
     boardMarkerStrongWidth = new UBSetting(this, "Board", "MarkerStrongWidth", 48.0);
@@ -635,6 +640,103 @@ qreal UBSettings::penStrongWidth()
 void UBSettings::setPenStrongWidth(qreal width)
 {
     boardPenStrongWidth->set(width);
+}
+
+
+int UBSettings::shapeWidthIndex()
+{
+    return value("Board/ShapeLineWidthIndex", 0).toInt();
+}
+
+
+void UBSettings::setShapeWidthIndex(int index)
+{
+    if (index != shapeWidthIndex())
+    {
+        setValue("Board/ShapeLineWidthIndex", index);
+    }
+}
+
+
+qreal UBSettings::currentShapeWidth()
+{
+    qreal width = 0;
+
+    switch (shapeWidthIndex())
+    {
+        case UBWidth::Fine:
+            width = boardShapeFineWidth->get().toDouble();
+            break;
+        case UBWidth::Medium:
+            width = boardShapeMediumWidth->get().toDouble();
+            break;
+        case UBWidth::Strong:
+            width = boardShapeStrongWidth->get().toDouble();
+            break;
+        default:
+            Q_ASSERT(false);
+            //failsafe
+            width = boardShapeFineWidth->get().toDouble();
+            break;
+    }
+
+    return width;
+}
+
+
+qreal UBSettings::shapeStrongWidth()
+{
+    return boardShapeStrongWidth->get().toDouble();
+}
+
+
+void UBSettings::setShapeStrongWidth(qreal width)
+{
+    boardShapeStrongWidth->set(width);
+}
+
+
+int UBSettings::shapeKind()
+{
+    const int kind = boardShapeLastKind->get().toInt();
+    return (kind >= 0 && kind < UBShapeKindCount) ? kind : 0;
+}
+
+
+int UBSettings::shapeColorIndex()
+{
+    // Clamp saved values so a palette with fewer swatches can never leave the
+    // Shape tool with an invalid selection.
+    const int index = value("Board/ShapeColorIndex", 0).toInt();
+    return qBound(0, index, colorPaletteSize - 1);
+}
+
+
+void UBSettings::setShapeColorIndex(int index)
+{
+    index = qBound(0, index, colorPaletteSize - 1);
+    if (index != shapeColorIndex())
+    {
+        setValue("Board/ShapeColorIndex", index);
+    }
+}
+
+
+QColor UBSettings::shapeColor(bool onDarkBackground)
+{
+    const QList<QColor> colors = shapeColors(onDarkBackground);
+    if (colors.isEmpty())
+        return QColor(Qt::black);
+
+    return colors.at(qBound(0, shapeColorIndex(), colors.size() - 1));
+}
+
+
+QList<QColor> UBSettings::shapeColors(bool onDarkBackground)
+{
+    // The Shape tool shares the Pen swatch list (including custom colours);
+    // only the selected index is independent.
+    return penColors(onDarkBackground);
 }
 
 

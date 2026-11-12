@@ -82,6 +82,16 @@ class UBSettings : public QObject
         QColor markerColor(bool onDarkBackground);
         QList<QColor> markerColors(bool onDarkBackground);
 
+        // Shape tool related
+        int shapeWidthIndex();
+        qreal currentShapeWidth();
+        qreal shapeStrongWidth();
+        void setShapeStrongWidth(qreal width);
+        int shapeKind();
+        int shapeColorIndex();
+        QColor shapeColor(bool onDarkBackground);
+        QList<QColor> shapeColors(bool onDarkBackground);
+
         // Eraser related
         int eraserWidthIndex();
         qreal eraserFineWidth();
@@ -283,6 +293,11 @@ class UBSettings : public QObject
         UBSetting* boardPenMediumWidth;
         UBSetting* boardPenStrongWidth;
 
+        UBSetting* boardShapeFineWidth;
+        UBSetting* boardShapeMediumWidth;
+        UBSetting* boardShapeStrongWidth;
+        UBSetting* boardShapeLastKind;
+
         UBSetting* boardMarkerFineWidth;
         UBSetting* boardMarkerMediumWidth;
         UBSetting* boardMarkerStrongWidth;
@@ -452,6 +467,9 @@ class UBSettings : public QObject
 
         void setMarkerWidthIndex(int index);
         void setMarkerColorIndex(int index);
+
+        void setShapeWidthIndex(int index);
+        void setShapeColorIndex(int index);
 
         void setEraserWidthIndex(int index);
         void setEraserFineWidth(qreal width);

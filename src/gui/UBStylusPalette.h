@@ -59,6 +59,7 @@ class UBStylusPalette : public UBActionPalette
         int mLastSelectedId;
         QAction *mActionLasso;
         QAction *mActionLaser;
+        QAction *mActionShape;
         QAction *mStrokeOnlySelectionAction;
         UBActionPaletteButton *mStrokeOnlySelectionButton;
 

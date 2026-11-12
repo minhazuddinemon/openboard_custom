@@ -146,6 +146,48 @@ QIcon createLassoIcon()
     return icon;
 }
 
+QPixmap renderShapePixmap(bool active)
+{
+    constexpr int iconSize = 48;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QPointF center(iconSize / 2.0, iconSize / 2.0);
+    const qreal radius = iconSize * 0.44;
+
+    if (active) {
+        // Same white radial sphere as the standard *On.svg palette icons.
+        QRadialGradient halo(center, radius);
+        halo.setColorAt(0.0, QColor(255, 255, 255, 0));
+        halo.setColorAt(1.0, QColor(255, 255, 255, 255));
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(halo);
+        painter.drawEllipse(center, radius, radius);
+    }
+
+    const QColor ink = active ? QColor(35, 31, 32) : QColor(230, 230, 230);
+    painter.setPen(QPen(ink, 2.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    // Rounded rectangle plus a small circle, representing the shape tool.
+    painter.drawRoundedRect(QRectF(6.0, 13.0, 25.0, 22.0), 3.0, 3.0);
+    painter.drawEllipse(QPointF(33.0, 32.0), 7.0, 7.0);
+
+    return pixmap;
+}
+
+QIcon createShapeIcon()
+{
+    QIcon icon;
+    icon.addPixmap(renderShapePixmap(false), QIcon::Normal, QIcon::Off);
+    icon.addPixmap(renderShapePixmap(true), QIcon::Normal, QIcon::On);
+    return icon;
+}
+
 } // namespace
 
 UBStylusPalette::UBStylusPalette(QWidget *parent, Qt::Orientation orient)
@@ -153,6 +195,7 @@ UBStylusPalette::UBStylusPalette(QWidget *parent, Qt::Orientation orient)
     , mLastSelectedId(-1)
     , mActionLasso(0)
     , mActionLaser(0)
+    , mActionShape(0)
     , mStrokeOnlySelectionAction(0)
     , mStrokeOnlySelectionButton(0)
 {
@@ -194,7 +237,16 @@ UBStylusPalette::UBStylusPalette(QWidget *parent, Qt::Orientation orient)
     connect(mActionLaser, &QAction::triggered,
             UBDrawingController::drawingController(), &UBDrawingController::setLaserMode);
     addToolAction(mActionLaser, UBStylusTool::Laser);
-    addToolAction(UBApplication::mainWindow->actionLine, UBStylusTool::Line);
+
+    // Shape tool replaces the Line button in the palette. The Line tool and its
+    // action are kept intact for existing documents and shortcuts.
+    mActionShape = new QAction(createShapeIcon(), tr("Shape"), this);
+    mActionShape->setCheckable(true);
+    mActionShape->setToolTip(tr("Shape tool: draw rectangles and ellipses"));
+    connect(mActionShape, &QAction::triggered,
+            UBDrawingController::drawingController(), &UBDrawingController::setShapeMode);
+    addToolAction(mActionShape, UBStylusTool::Shape);
+
     addToolAction(UBApplication::mainWindow->actionText, UBStylusTool::Text);
     addToolAction(UBApplication::mainWindow->actionCapture, UBStylusTool::Capture);
 
@@ -235,6 +287,8 @@ UBStylusPalette::UBStylusPalette(QWidget *parent, Qt::Orientation orient)
                 UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Lasso);
     mActionLaser->setChecked(
                 UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Laser);
+    mActionShape->setChecked(
+                UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Shape);
 
     setButtonIconSize(QSize(42, 42));
     groupActions();
@@ -302,6 +356,9 @@ void UBStylusPalette::stylusToolChanged(int tool)
 
     if (mActionLaser)
         mActionLaser->setChecked(tool == UBStylusTool::Laser);
+
+    if (mActionShape)
+        mActionShape->setChecked(tool == UBStylusTool::Shape);
 }
 
 void UBStylusPalette::strokeOnlySelectionToggled(bool enabled)

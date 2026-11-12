@@ -28,11 +28,13 @@
 
 
 #include "UBGraphicsScene.h"
+#include "UBShapeGeometry.h"
 
 #include <QtGui>
 #include <QtSvg>
 #include <QGraphicsView>
 #include <QGraphicsVideoItem>
+#include <QGraphicsObject>
 #include <QTimer>
 
 #include "frameworks/UBGeometryUtils.h"
@@ -81,6 +83,8 @@
 #include "UBGraphicsStroke.h"
 
 #include "core/memcheck.h"
+
+#include <cmath>
 
 
 #define DEFAULT_Z_VALUE 0.0
@@ -334,6 +338,12 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mPreviousWidth(0)
     , mDistanceFromLastStrokePoint(0)
     , mInputDeviceIsPressed(false)
+    , mShapeGestureActive(false)
+    , mShapeEditing(false)
+    , mShapeApexDragging(false)
+    , mShapeForceCommit(false)
+    , mShapeHandle(0)
+    , mShapeStartMarker(0)
     , mArcPolygonItem(0)
     , mRenderingContext(Screen)
     , mCurrentStroke(0)
@@ -378,6 +388,11 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
 
 UBGraphicsScene::~UBGraphicsScene()
 {
+    mShapeEditing = false;
+    mShapeApexDragging = false;
+    removeShapeHandle();
+    removeShapeStartMarker();
+
     clearLassoPreview();
 
     if (mLaserTimer)
@@ -424,6 +439,21 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
         accepted = inputDeviceMove(scenePos, pressure, modifiers);
     }
     else {
+        if (mShapeEditing)
+        {
+            if (isPointOnShapeHandle(scenePos))
+            {
+                mInputDeviceIsPressed = true;
+                mShapeApexDragging = true;
+                mCurrentPoint = scenePos;
+                return true;
+            }
+
+            // A press away from the handle commits the free triangle; this same
+            // press then starts a new shape below.
+            commitShapeEditing();
+        }
+
         mInputDeviceIsPressed = true;
         mStrokeEraseGroups.clear();
 
@@ -454,12 +484,12 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
             // ---------------------------------------------------------------
             mCurrentStroke = new UBGraphicsStroke(shared_from_this());
 
-            if (currentTool != UBStylusTool::Line){
+            if (currentTool != UBStylusTool::Line && currentTool != UBStylusTool::Shape){
                 // Handle the pressure
                 width = UBDrawingController::drawingController()->currentToolWidth() * pressure;
             }
             else{
-                // Ignore pressure for the line tool
+                // Ignore pressure for the line and shape tools
                 width = UBDrawingController::drawingController()->currentToolWidth();
             }
 
@@ -481,9 +511,20 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
                 }
 
                 moveTo(pos);
-                drawLineTo(pos, width, isLine);
 
-                mCurrentStroke->addPoint(pos, width);
+                if (currentTool == UBStylusTool::Shape)
+                {
+                    // The shape is built from the press/drag rectangle, so there
+                    // is nothing to draw until the pointer moves.
+                    mShapeStartPoint = pos;
+                    mShapeGestureActive = true;
+                    updateShapeStartMarker();
+                }
+                else
+                {
+                    drawLineTo(pos, width, isLine);
+                    mCurrentStroke->addPoint(pos, width);
+                }
             }
             accepted = true;
         }
@@ -545,6 +586,26 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
     QPointF position = QPointF(scenePos);
     mCurrentPoint = position;
 
+    if (mShapeEditing)
+    {
+        if (mInputDeviceIsPressed && mShapeApexDragging)
+        {
+            qreal width = dc->currentToolWidth();
+            width /= UBApplication::boardController->systemScaleFactor();
+            width /= UBApplication::boardController->currentZoom();
+
+            mShapeApex = position;
+            clearShapePreview();
+            addShapePolygonPoints(
+                    UBShapeGeometry::freeTriangle(mShapeBaseStart, mShapeBaseEnd, mShapeApex),
+                    width);
+            updateShapeHandle();
+            accepted = true;
+        }
+
+        return accepted;
+    }
+
     if (currentTool == UBStylusTool::Eraser)
     {
         drawEraser(position, mInputDeviceIsPressed);
@@ -595,11 +656,11 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
         {
             qreal width = 0;
 
-            if (currentTool != UBStylusTool::Line){
+            if (currentTool != UBStylusTool::Line && currentTool != UBStylusTool::Shape){
                 // Handle the pressure
                 width = dc->currentToolWidth() * qMax(pressure, 0.2);
             }else{
-                // Ignore pressure for line tool
+                // Ignore pressure for line and shape tools
                 width = dc->currentToolWidth();
             }
 
@@ -675,6 +736,10 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
                 UBApplication::boardController->setCursorFromAngle(angle, offset);
 
                 drawLineTo(position, width, true);
+            }
+
+            else if (currentTool == UBStylusTool::Shape) {
+                drawShapePreview(position, width);
             }
 
             else {
@@ -766,6 +831,14 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     UBStylusTool::Enum currentTool = (UBStylusTool::Enum)tool;
     UBDrawingController *dc = UBDrawingController::drawingController();
 
+    if (mShapeEditing && currentTool == UBStylusTool::Shape)
+    {
+        // Release after dragging the apex handle: keep editing.
+        mShapeApexDragging = false;
+        mInputDeviceIsPressed = false;
+        return true;
+    }
+
     if (currentTool == UBStylusTool::Lasso) {
         finishLasso();
         accepted = true;
@@ -777,6 +850,60 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     if (currentTool == UBStylusTool::Laser) {
         finishLaserStroke();
         accepted = true;
+    }
+
+    if (currentTool == UBStylusTool::Shape
+            && UBDrawingController::drawingController()->shapeKind() == 12
+            && !mShapeEditing && !mShapeForceCommit)
+    {
+        const QPointF baseEnd = mCurrentPoint;
+        const qreal minimumSize = 3.0
+                / (UBApplication::boardController->systemScaleFactor()
+                   * UBApplication::boardController->currentZoom());
+
+        if (QLineF(mShapeStartPoint, baseEnd).length() < minimumSize
+                || !mCurrentStroke || mCurrentStroke->polygons().isEmpty())
+        {
+            cancelShapePreview();
+            return true;
+        }
+
+        // The apex handle takes over from the start-point ring.
+        removeShapeStartMarker();
+
+        mShapeEditing = true;
+        mShapeApexDragging = false;
+        mShapeBaseStart = mShapeStartPoint;
+        mShapeBaseEnd = baseEnd;
+        mShapeApex = UBShapeGeometry::freeTriangleApex(mShapeBaseStart, mShapeBaseEnd);
+
+        qreal width = dc->currentToolWidth();
+        width /= UBApplication::boardController->systemScaleFactor();
+        width /= UBApplication::boardController->currentZoom();
+
+        clearShapePreview();
+        addShapePolygonPoints(
+                UBShapeGeometry::freeTriangle(mShapeBaseStart, mShapeBaseEnd, mShapeApex),
+                width);
+        updateShapeHandle();
+
+        mShapeGestureActive = false;
+        mInputDeviceIsPressed = false;
+        return true;
+    }
+
+    if (currentTool == UBStylusTool::Shape)
+    {
+        mShapeGestureActive = false;
+        removeShapeStartMarker();
+
+        // A tiny accidental drag leaves no preview polygon behind: do not
+        // create an empty stroke group or push an empty undo command.
+        if (mCurrentStroke && mCurrentStroke->polygons().isEmpty())
+        {
+            delete mCurrentStroke;
+            mCurrentStroke = NULL;
+        }
     }
 
     if (dc->isDrawingTool(tool) || mDrawWithCompass)
@@ -1194,6 +1321,26 @@ void UBGraphicsScene::finishLasso()
 }
 
 
+static bool strokePolygonTouchesCircle(UBGraphicsPolygonItem* polygon,
+                                       const QPainterPath& cursorCircle)
+{
+    if (!polygon)
+        return false;
+
+    // Fast pre-filter: the polygon must at least be near the cursor.
+    if (!polygon->sceneBoundingRect().intersects(cursorCircle.boundingRect()))
+        return false;
+
+    // Test the real filled geometry instead of the stroke's bounding box.
+    const QPainterPath polygonInScene =
+            polygon->sceneTransform().map(polygon->shape());
+
+    return polygonInScene.intersects(cursorCircle)
+            || polygonInScene.contains(cursorCircle)
+            || cursorCircle.contains(polygonInScene);
+}
+
+
 QGraphicsItem* UBGraphicsScene::strokeErasableItemFor(QGraphicsItem* item) const
 {
     if (!item || item == mBackgroundObject)
@@ -1227,23 +1374,29 @@ QGraphicsItem* UBGraphicsScene::strokeErasableItemFor(QGraphicsItem* item) const
 
 bool UBGraphicsScene::strokeEraseAt(const QPointF& scenePos)
 {
-    // The hit target is the small on-screen cursor dot (about 10 px), converted
-    // to scene coordinates so it stays visually constant while zooming.
-    qreal hitSize = 10.0;
+    // The hit target is exactly the on-screen cursor circle, converted to scene
+    // coordinates so it stays visually constant while zooming.
+    qreal radius = StrokeEraserCircleDiameter / 2.0;
     if (UBApplication::boardController)
     {
         const qreal viewScale = UBApplication::boardController->systemScaleFactor()
                 * UBApplication::boardController->currentZoom();
 
         if (viewScale > 0.0)
-            hitSize /= viewScale;
+            radius /= viewScale;
     }
 
-    const QRectF targetRect(scenePos.x() - hitSize / 2.0,
-                            scenePos.y() - hitSize / 2.0,
+    const qreal hitSize = radius * 2.0;
+    const QRectF targetRect(scenePos.x() - radius,
+                            scenePos.y() - radius,
                             hitSize, hitSize);
 
+    QPainterPath cursorCircle;
+    cursorCircle.addEllipse(scenePos, radius, radius);
+
     // BspTreeIndex-backed spatial query: only items near the cursor are visited.
+    // This is a cheap bounding-rect pre-filter; the precise geometry test below
+    // runs only on the few polygons that are actually near the cursor.
     const QList<QGraphicsItem*> candidates =
             items(targetRect, Qt::IntersectsItemBoundingRect);
 
@@ -1251,6 +1404,16 @@ bool UBGraphicsScene::strokeEraseAt(const QPointF& scenePos)
 
     for (QGraphicsItem* candidate : candidates)
     {
+        // A stroke group's bounding rect covers its whole shape, including the
+        // hollow interior of a closed shape, so never decide on it. Its polygon
+        // children are returned separately by items() and tested below.
+        if (candidate->type() == UBGraphicsStrokesGroup::Type)
+            continue;
+
+        UBGraphicsPolygonItem* polygon = qgraphicsitem_cast<UBGraphicsPolygonItem*>(candidate);
+        if (polygon && !strokePolygonTouchesCircle(polygon, cursorCircle))
+            continue;
+
         QGraphicsItem* item = strokeErasableItemFor(candidate);
         if (!item)
             continue;
@@ -1484,6 +1647,121 @@ void UBGraphicsScene::drawCurve(const QList<QPointF>& points, qreal startWidth, 
     mPreviousPoint = points.last();
 }
 
+namespace
+{
+
+class UBShapeStartMarkerItem : public QGraphicsObject
+{
+public:
+    UBShapeStartMarkerItem()
+    {
+        setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+        setAcceptedMouseButtons(Qt::NoButton);
+        setZValue(9999999.0);
+    }
+
+    QRectF boundingRect() const override
+    {
+        const qreal radius = ShapeStartMarkerDiameter / 2.0;
+        return QRectF(-radius, -radius, ShapeStartMarkerDiameter, ShapeStartMarkerDiameter);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
+    {
+        // Overlay only: never render into PDF, thumbnails or podcast frames.
+        if (scene()
+                && static_cast<UBGraphicsScene*>(scene())->renderingContext()
+                        != UBGraphicsScene::Screen)
+        {
+            return;
+        }
+
+        const qreal radius = ShapeStartMarkerDiameter / 2.0;
+        const QRectF ring(-radius, -radius, ShapeStartMarkerDiameter, ShapeStartMarkerDiameter);
+
+        // Ring only (no fill), deliberately distinct from the filled apex handle.
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setBrush(Qt::NoBrush);
+        painter->setPen(QPen(QColor(20, 20, 20), 3.0));
+        painter->drawEllipse(ring);
+        painter->setPen(QPen(QColor(255, 255, 255), 1.4));
+        painter->drawEllipse(ring);
+    }
+};
+
+class UBShapeHandleItem : public QGraphicsObject
+{
+public:
+    UBShapeHandleItem()
+    {
+        setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
+        setAcceptedMouseButtons(Qt::NoButton);
+        setZValue(10000000.0);
+    }
+
+    QRectF boundingRect() const override
+    {
+        const qreal radius = ShapeHandleDiameter / 2.0;
+        return QRectF(-radius, -radius, ShapeHandleDiameter, ShapeHandleDiameter);
+    }
+
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override
+    {
+        // Overlay only: never render into PDF, thumbnails or podcast frames.
+        if (scene()
+                && static_cast<UBGraphicsScene*>(scene())->renderingContext()
+                        != UBGraphicsScene::Screen)
+        {
+            return;
+        }
+
+        const qreal radius = ShapeHandleDiameter / 2.0;
+        const QRectF circle(-radius, -radius, ShapeHandleDiameter, ShapeHandleDiameter);
+
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(QColor(35, 31, 32), 2.0));
+        painter->setBrush(QColor(255, 255, 255));
+        painter->drawEllipse(circle);
+    }
+};
+
+} // namespace
+
+void UBGraphicsScene::drawShapePreview(const QPointF& pEndPoint, qreal pWidth)
+{
+    if (!mShapeGestureActive)
+        return;
+
+    clearShapePreview();
+
+    // Keep the signed drag rect: some shapes need the drag direction (equilateral
+    // and right-angle triangles) and constrained boxes.
+    const QRectF dragRect(mShapeStartPoint, pEndPoint);
+    const QRectF rect = dragRect.normalized();
+
+    const qreal minimumSize = 3.0
+            / (UBApplication::boardController->systemScaleFactor()
+               * UBApplication::boardController->currentZoom());
+
+    if (rect.width() < minimumSize && rect.height() < minimumSize)
+        return;
+
+    const QVector<QPointF> points = UBShapeGeometry::pointsForKind(
+            UBDrawingController::drawingController()->shapeKind(), dragRect);
+
+    addShapePolygonPoints(points, pWidth);
+}
+
+void UBGraphicsScene::addShapePolygonPoints(const QVector<QPointF>& points, qreal pWidth)
+{
+    for (int i = 0; i + 1 < points.size(); ++i)
+    {
+        UBGraphicsPolygonItem* polygonItem =
+                lineToPolygonItem(QLineF(points.at(i), points.at(i + 1)), pWidth);
+        addPolygonItemToCurrentStroke(polygonItem);
+    }
+}
+
 void UBGraphicsScene::addPolygonItemToCurrentStroke(UBGraphicsPolygonItem* polygonItem)
 {
     if (!polygonItem->brush().isOpaque())
@@ -1510,6 +1788,148 @@ void UBGraphicsScene::addPolygonItemToCurrentStroke(UBGraphicsPolygonItem* polyg
 
     mPreviousPolygonItems.append(polygonItem);
 
+}
+
+void UBGraphicsScene::clearShapePreview()
+{
+    if (mAddedItems.isEmpty())
+        return;
+
+    // Preview polygons own their stroke: UBGraphicsPolygonItem::clearStroke()
+    // deletes the UBGraphicsStroke when its last polygon is destroyed. Detach
+    // the scene's raw pointers first so they can never dangle.
+    UBGraphicsStroke* stroke = mCurrentStroke;
+    mCurrentStroke = NULL;
+    mpLastPolygon = NULL;
+
+    const QSet<QGraphicsItem*> previewItems = mAddedItems;
+    mAddedItems.clear();
+
+    for (QGraphicsItem* item : previewItems)
+    {
+        UBGraphicsPolygonItem* polygonItem = qgraphicsitem_cast<UBGraphicsPolygonItem*>(item);
+        if (polygonItem)
+        {
+            mPreviousPolygonItems.removeAll(polygonItem);
+
+            // Removing here keeps the stroke's list in sync; the destructor
+            // removes it again (no-op) and frees the stroke when it is last.
+            if (stroke)
+                stroke->remove(polygonItem);
+        }
+
+        removeItem(item);
+        UBCoreGraphicsScene::deleteItem(item);
+    }
+}
+
+void UBGraphicsScene::cancelShapePreview()
+{
+    mShapeEditing = false;
+    mShapeApexDragging = false;
+    removeShapeHandle();
+    removeShapeStartMarker();
+
+    clearShapePreview();
+
+    if (mCurrentStroke && mCurrentStroke->polygons().isEmpty())
+    {
+        delete mCurrentStroke;
+        mCurrentStroke = NULL;
+    }
+
+    mShapeGestureActive = false;
+    mInputDeviceIsPressed = false;
+}
+
+void UBGraphicsScene::updateShapeHandle()
+{
+    if (!mShapeEditing)
+        return;
+
+    if (!mShapeHandle)
+    {
+        mShapeHandle = new UBShapeHandleItem();
+        QGraphicsScene::addItem(mShapeHandle);
+    }
+
+    mShapeHandle->setPos(mShapeApex);
+    mShapeHandle->setVisible(true);
+}
+
+void UBGraphicsScene::removeShapeHandle()
+{
+    if (!mShapeHandle)
+        return;
+
+    if (mShapeHandle->scene() == this)
+        QGraphicsScene::removeItem(mShapeHandle);
+
+    delete mShapeHandle;
+    mShapeHandle = NULL;
+}
+
+void UBGraphicsScene::updateShapeStartMarker()
+{
+    if (!mShapeGestureActive)
+        return;
+
+    if (!mShapeStartMarker)
+    {
+        mShapeStartMarker = new UBShapeStartMarkerItem();
+        QGraphicsScene::addItem(mShapeStartMarker);
+    }
+
+    mShapeStartMarker->setPos(mShapeStartPoint);
+    mShapeStartMarker->setVisible(true);
+}
+
+void UBGraphicsScene::removeShapeStartMarker()
+{
+    if (!mShapeStartMarker)
+        return;
+
+    if (mShapeStartMarker->scene() == this)
+        QGraphicsScene::removeItem(mShapeStartMarker);
+
+    delete mShapeStartMarker;
+    mShapeStartMarker = NULL;
+}
+
+bool UBGraphicsScene::isPointOnShapeHandle(const QPointF& scenePos) const
+{
+    if (!mShapeEditing || !mShapeHandle)
+        return false;
+
+    qreal viewScale = 1.0;
+    if (UBApplication::boardController)
+    {
+        viewScale = UBApplication::boardController->systemScaleFactor()
+                * UBApplication::boardController->currentZoom();
+    }
+
+    const qreal hitRadius = (ShapeHandleDiameter / 2.0 + 2.0)
+            / ((viewScale > 0.0) ? viewScale : 1.0);
+
+    return QLineF(scenePos, mShapeApex).length() <= hitRadius;
+}
+
+void UBGraphicsScene::commitShapeEditing()
+{
+    if (!mShapeEditing)
+        return;
+
+    mShapeEditing = false;
+    mShapeApexDragging = false;
+    removeShapeHandle();
+    removeShapeStartMarker();
+
+    // Reuse the normal release commit path without re-entering free-triangle
+    // editing mode.
+    const bool previousForceCommit = mShapeForceCommit;
+    mShapeForceCommit = true;
+    inputDeviceRelease(UBStylusTool::Shape);
+    mShapeForceCommit = previousForceCommit;
 }
 
 void UBGraphicsScene::eraseLineTo(const QPointF &pEndPoint, const qreal &pWidth)
@@ -1746,6 +2166,11 @@ void UBGraphicsScene::initPolygonItem(UBGraphicsPolygonItem* polygonItem)
     {
         colorOnDarkBG = UBApplication::boardController->markerColorOnDarkBackground();
         colorOnLightBG = UBApplication::boardController->markerColorOnLightBackground();
+    }
+    else if (UBDrawingController::drawingController()->stylusTool() == UBStylusTool::Shape)
+    {
+        colorOnDarkBG = UBSettings::settings()->shapeColor(true);
+        colorOnLightBG = UBSettings::settings()->shapeColor(false);
     }
     else // settings->stylusTool() == UBStylusTool::Pen + failsafe
     {
@@ -2048,6 +2473,7 @@ UBItem* UBGraphicsScene::deepCopy() const
 void UBGraphicsScene::clearContent(clearCase pCase)
 {
     clearLassoPreview();
+    cancelShapePreview();
 
     QSet<QGraphicsItem*> removedItems;
     UBGraphicsItemUndoCommand::GroupDataTable groupsMap;
@@ -3005,12 +3431,26 @@ void UBGraphicsScene::stylusToolChanged(int tool, int previousTool)
     {
         hideTool();
 
-        if (mInputDeviceIsPressed)
+        if (mShapeEditing)
         {
-            // tool was changed while input device is pressed
-            // simulate release and press to terminate previous strokes
-            inputDeviceRelease(previousTool);
-            inputDevicePress(mCurrentPoint);
+            // A tool change finalizes the free triangle before switching.
+            commitShapeEditing();
+        }
+        else if (mInputDeviceIsPressed)
+        {
+            if (previousTool == UBStylusTool::Shape)
+            {
+                // Cancel the in-progress shape instead of committing a
+                // half-drawn preview when the tool changes mid-gesture.
+                cancelShapePreview();
+            }
+            else
+            {
+                // tool was changed while input device is pressed
+                // simulate release and press to terminate previous strokes
+                inputDeviceRelease(previousTool);
+                inputDevicePress(mCurrentPoint);
+            }
         }
         else if (previousTool >= 0)
         {
