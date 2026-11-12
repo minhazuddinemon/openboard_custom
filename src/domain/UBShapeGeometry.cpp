@@ -141,16 +141,7 @@ QVector<QPointF> diamond(const QRectF& dragRect)
 
 QVector<QPointF> parallelogram(const QRectF& dragRect)
 {
-    const QRectF box = boxOf(dragRect);
-    const qreal shift = box.width() * 0.25;
-
-    QVector<QPointF> points;
-    points << box.bottomLeft()
-           << QPointF(box.left() + shift, box.top())
-           << box.topRight()
-           << QPointF(box.right() - shift, box.bottom())
-           << box.bottomLeft();
-    return points;
+    return editableShapePoints(6, dragRect, initialShapeHandle(6, dragRect));
 }
 
 QVector<QPointF> pentagon(const QRectF& dragRect)
@@ -246,6 +237,51 @@ QVector<QPointF> freeTriangle(const QRectF& dragRect)
     const QPointF baseStart = dragRect.topLeft();
     const QPointF baseEnd = dragRect.bottomRight();
     return freeTriangle(baseStart, baseEnd, freeTriangleApex(baseStart, baseEnd));
+}
+
+bool isEditableKind(int kind)
+{
+    return kind == 6 || kind == 12;
+}
+
+QPointF initialShapeHandle(int kind, const QRectF& dragRect)
+{
+    if (kind == 12)
+        return freeTriangleApex(dragRect.topLeft(), dragRect.bottomRight());
+
+    if (kind == 6)
+    {
+        const QRectF box = boxOf(dragRect);
+        const qreal length = box.width() * 0.75;
+        return QPointF(box.left() + box.width() * 0.25 + length / 2.0, box.top());
+    }
+
+    return dragRect.topLeft();
+}
+
+QVector<QPointF> editableShapePoints(int kind, const QRectF& dragRect,
+                                    const QPointF& handlePos)
+{
+    if (kind == 12)
+        return freeTriangle(dragRect.topLeft(), dragRect.bottomRight(), handlePos);
+
+    if (kind == 6)
+    {
+        const QRectF box = boxOf(dragRect);
+        const qreal length = box.width() * 0.75;
+
+        // The bottom edge is fixed; the top edge keeps its length and is
+        // centred on the movable handle.
+        QVector<QPointF> points;
+        points << QPointF(box.left(), box.bottom())
+               << QPointF(handlePos.x() - length / 2.0, handlePos.y())
+               << QPointF(handlePos.x() + length / 2.0, handlePos.y())
+               << QPointF(box.left() + length, box.bottom())
+               << QPointF(box.left(), box.bottom());
+        return points;
+    }
+
+    return pointsForKind(kind, dragRect);
 }
 
 namespace

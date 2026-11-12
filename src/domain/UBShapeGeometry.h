@@ -54,6 +54,11 @@ QVector<QPointF> freeTriangle(const QPointF& baseStart, const QPointF& baseEnd,
                               const QPointF& apex);
 QPointF freeTriangleApex(const QPointF& baseStart, const QPointF& baseEnd);
 
+bool isEditableKind(int kind);
+QPointF initialShapeHandle(int kind, const QRectF& dragRect);
+QVector<QPointF> editableShapePoints(int kind, const QRectF& dragRect,
+                                     const QPointF& handlePos);
+
 const QVector<ShapeDefinition>& shapes();
 QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect);
 QString nameForKind(int kind);

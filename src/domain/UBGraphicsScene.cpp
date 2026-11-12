@@ -340,8 +340,9 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mInputDeviceIsPressed(false)
     , mShapeGestureActive(false)
     , mShapeEditing(false)
-    , mShapeApexDragging(false)
+    , mShapeHandleDragging(false)
     , mShapeForceCommit(false)
+    , mShapeEditingKind(0)
     , mShapeHandle(0)
     , mArcPolygonItem(0)
     , mRenderingContext(Screen)
@@ -388,7 +389,7 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
 UBGraphicsScene::~UBGraphicsScene()
 {
     mShapeEditing = false;
-    mShapeApexDragging = false;
+    mShapeHandleDragging = false;
     removeShapeHandle();
 
     clearLassoPreview();
@@ -442,12 +443,12 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
             if (isPointOnShapeHandle(scenePos))
             {
                 mInputDeviceIsPressed = true;
-                mShapeApexDragging = true;
+                mShapeHandleDragging = true;
                 mCurrentPoint = scenePos;
                 return true;
             }
 
-            // A press away from the handle commits the free triangle; this same
+            // A press away from the handle commits the edited shape; this same
             // press then starts a new shape below.
             commitShapeEditing();
         }
@@ -585,16 +586,18 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
 
     if (mShapeEditing)
     {
-        if (mInputDeviceIsPressed && mShapeApexDragging)
+        if (mInputDeviceIsPressed && mShapeHandleDragging)
         {
             qreal width = dc->currentToolWidth();
             width /= UBApplication::boardController->systemScaleFactor();
             width /= UBApplication::boardController->currentZoom();
 
-            mShapeApex = position;
+            mShapeHandlePos = position;
             clearShapePreview();
             addShapePolygonPoints(
-                    UBShapeGeometry::freeTriangle(mShapeBaseStart, mShapeBaseEnd, mShapeApex),
+                    UBShapeGeometry::editableShapePoints(mShapeEditingKind,
+                                                         mShapeEditingDragRect,
+                                                         mShapeHandlePos),
                     width);
             updateShapeHandle();
             accepted = true;
@@ -830,8 +833,8 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
 
     if (mShapeEditing && currentTool == UBStylusTool::Shape)
     {
-        // Release after dragging the apex handle: keep editing.
-        mShapeApexDragging = false;
+        // Release after dragging the handle: keep editing.
+        mShapeHandleDragging = false;
         mInputDeviceIsPressed = false;
         return true;
     }
@@ -850,15 +853,17 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     }
 
     if (currentTool == UBStylusTool::Shape
-            && UBDrawingController::drawingController()->shapeKind() == 12
+            && UBShapeGeometry::isEditableKind(
+                    UBDrawingController::drawingController()->shapeKind())
             && !mShapeEditing && !mShapeForceCommit)
     {
-        const QPointF baseEnd = mCurrentPoint;
+        const QPointF dragEnd = mCurrentPoint;
+        const QRectF dragRect(mShapeStartPoint, dragEnd);
         const qreal minimumSize = 3.0
                 / (UBApplication::boardController->systemScaleFactor()
                    * UBApplication::boardController->currentZoom());
 
-        if (QLineF(mShapeStartPoint, baseEnd).length() < minimumSize
+        if (QLineF(mShapeStartPoint, dragEnd).length() < minimumSize
                 || !mCurrentStroke || mCurrentStroke->polygons().isEmpty())
         {
             cancelShapePreview();
@@ -866,10 +871,11 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
         }
 
         mShapeEditing = true;
-        mShapeApexDragging = false;
-        mShapeBaseStart = mShapeStartPoint;
-        mShapeBaseEnd = baseEnd;
-        mShapeApex = UBShapeGeometry::freeTriangleApex(mShapeBaseStart, mShapeBaseEnd);
+        mShapeHandleDragging = false;
+        mShapeEditingKind = UBDrawingController::drawingController()->shapeKind();
+        mShapeEditingDragRect = dragRect;
+        mShapeHandlePos = UBShapeGeometry::initialShapeHandle(mShapeEditingKind,
+                                                              mShapeEditingDragRect);
 
         qreal width = dc->currentToolWidth();
         width /= UBApplication::boardController->systemScaleFactor();
@@ -877,7 +883,9 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
 
         clearShapePreview();
         addShapePolygonPoints(
-                UBShapeGeometry::freeTriangle(mShapeBaseStart, mShapeBaseEnd, mShapeApex),
+                UBShapeGeometry::editableShapePoints(mShapeEditingKind,
+                                                     mShapeEditingDragRect,
+                                                     mShapeHandlePos),
                 width);
         updateShapeHandle();
 
@@ -1780,7 +1788,7 @@ void UBGraphicsScene::clearShapePreview()
 void UBGraphicsScene::cancelShapePreview()
 {
     mShapeEditing = false;
-    mShapeApexDragging = false;
+    mShapeHandleDragging = false;
     removeShapeHandle();
 
     clearShapePreview();
@@ -1806,7 +1814,7 @@ void UBGraphicsScene::updateShapeHandle()
         QGraphicsScene::addItem(mShapeHandle);
     }
 
-    mShapeHandle->setPos(mShapeApex);
+    mShapeHandle->setPos(mShapeHandlePos);
     mShapeHandle->setVisible(true);
 }
 
@@ -1837,7 +1845,7 @@ bool UBGraphicsScene::isPointOnShapeHandle(const QPointF& scenePos) const
     const qreal hitRadius = (ShapeHandleDiameter / 2.0 + 2.0)
             / ((viewScale > 0.0) ? viewScale : 1.0);
 
-    return QLineF(scenePos, mShapeApex).length() <= hitRadius;
+    return QLineF(scenePos, mShapeHandlePos).length() <= hitRadius;
 }
 
 void UBGraphicsScene::commitShapeEditing()
@@ -1846,7 +1854,7 @@ void UBGraphicsScene::commitShapeEditing()
         return;
 
     mShapeEditing = false;
-    mShapeApexDragging = false;
+    mShapeHandleDragging = false;
     removeShapeHandle();
 
     // Reuse the normal release commit path without re-entering free-triangle

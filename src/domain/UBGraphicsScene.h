@@ -534,11 +534,11 @@ signals:
         QPointF mShapeStartPoint;
         bool mShapeGestureActive;
         bool mShapeEditing;
-        bool mShapeApexDragging;
+        bool mShapeHandleDragging;
         bool mShapeForceCommit;
-        QPointF mShapeBaseStart;
-        QPointF mShapeBaseEnd;
-        QPointF mShapeApex;
+        QRectF mShapeEditingDragRect;
+        int mShapeEditingKind;
+        QPointF mShapeHandlePos;
         QGraphicsItem* mShapeHandle;
 
         QSet<QGraphicsItem*> mTools;

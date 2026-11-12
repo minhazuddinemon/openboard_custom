@@ -260,6 +260,50 @@ QIcon createShapeKindIcon(int kind)
         }
 
         painter.drawPolygon(polygon);
+
+        // Small identifying marks so each editable kind is recognisable.
+        if (kind == 6)
+        {
+            // Parallelogram: filled dot at the top-edge midpoint.
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(ink);
+            painter.drawEllipse((polygon.at(1) + polygon.at(2)) / 2.0, 1.8, 1.8);
+        }
+        else if (kind == 10)
+        {
+            // Equilateral triangle: one short tick on each side.
+            painter.setPen(QPen(ink, 1.2, Qt::SolidLine, Qt::RoundCap));
+            painter.setBrush(Qt::NoBrush);
+            for (int i = 0; i < 3; ++i)
+            {
+                const QPointF a = polygon.at(i);
+                const QPointF b = polygon.at((i + 1) % 3);
+                const QLineF side(a, b);
+                if (side.length() > 0.0)
+                {
+                    const QPointF perp(-side.dy() / side.length(),
+                                       side.dx() / side.length());
+                    const QPointF mid = (a + b) / 2.0;
+                    painter.drawLine(mid - perp * 2.4, mid + perp * 2.4);
+                }
+            }
+        }
+        else if (kind == 11)
+        {
+            // Right-angle triangle: small square in the right-angle corner.
+            painter.setPen(QPen(ink, 1.2));
+            painter.setBrush(Qt::NoBrush);
+            const QPointF corner = polygon.at(0);
+            painter.drawRect(QRectF(corner, corner + QPointF(4.0, 4.0)));
+        }
+        else if (kind == 12)
+        {
+            // Free triangle: filled dot at the apex.
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(ink);
+            painter.drawEllipse(polygon.at(2), 1.8, 1.8);
+        }
+        // Kind 4 (isosceles triangle) deliberately has no mark.
     }
 
     return QIcon(pixmap);
