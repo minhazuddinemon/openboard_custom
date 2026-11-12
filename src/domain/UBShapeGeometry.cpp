@@ -66,6 +66,99 @@ QVector<QPointF> regularPolygon(const QRectF& box, int sides, qreal startAngle)
     return points;
 }
 
+constexpr int kRoundedRectangleKind = 13;
+constexpr int kRoundedSquareKind = 14;
+
+// Maximum corner radius in scene units. Tune this to make the corners rounder
+// or sharper.
+constexpr qreal kRoundedCornerMaxRadius = 32.0;
+
+// Excalidraw-style corner: radius follows the short side, capped at a fixed
+// scene-unit maximum.
+qreal roundedCornerRadius(qreal shorterSide)
+{
+    if (shorterSide <= 0.0)
+        return 0.0;
+
+    const qreal radius = qMin(shorterSide * 0.25, kRoundedCornerMaxRadius);
+    return qBound(0.0, radius, shorterSide / 2.0);
+}
+
+QPointF quadraticBezierPoint(const QPointF& start, const QPointF& control,
+                             const QPointF& end, qreal t)
+{
+    const qreal oneMinusT = 1.0 - t;
+    return start * (oneMinusT * oneMinusT)
+            + control * (2.0 * oneMinusT * t)
+            + end * (t * t);
+}
+
+QVector<QPointF> roundedRectangleOutline(const QRectF& box, qreal radius)
+{
+    const qreal limit = qMin(box.width(), box.height()) / 2.0;
+    radius = qBound(0.0, radius, limit);
+
+    if (radius <= 0.0)
+    {
+        QVector<QPointF> square;
+        square << box.topLeft() << box.topRight() << box.bottomRight()
+               << box.bottomLeft() << box.topLeft();
+        return square;
+    }
+
+    constexpr int segmentsPerCorner = 10;
+
+    // Traversed clockwise. Each curve runs between two straight edges and uses
+    // the sharp box corner as its quadratic control point (Excalidraw style).
+    struct Corner
+    {
+        QPointF start;
+        QPointF control;
+        QPointF end;
+    };
+
+    const Corner corners[4] = {
+        { QPointF(box.right() - radius, box.top()), box.topRight(),
+          QPointF(box.right(), box.top() + radius) },
+        { QPointF(box.right(), box.bottom() - radius), box.bottomRight(),
+          QPointF(box.right() - radius, box.bottom()) },
+        { QPointF(box.left() + radius, box.bottom()), box.bottomLeft(),
+          QPointF(box.left(), box.bottom() - radius) },
+        { QPointF(box.left(), box.top() + radius), box.topLeft(),
+          QPointF(box.left() + radius, box.top()) }
+    };
+
+    QVector<QPointF> points;
+    points.reserve(4 * (segmentsPerCorner + 1) + 1);
+
+    for (const Corner& corner : corners)
+    {
+        for (int i = 0; i <= segmentsPerCorner; ++i)
+        {
+            const qreal t = qreal(i) / segmentsPerCorner;
+            points << quadraticBezierPoint(corner.start, corner.control,
+                                           corner.end, t);
+        }
+    }
+
+    points << points.first();
+    return points;
+}
+
+QVector<QPointF> roundedRectanglePoints(const QRectF& dragRect)
+{
+    const QRectF box = boxOf(dragRect);
+    const qreal shorter = qMin(box.width(), box.height());
+    return roundedRectangleOutline(box, roundedCornerRadius(shorter));
+}
+
+QVector<QPointF> roundedSquarePoints(const QRectF& dragRect)
+{
+    const QRectF box = constrainedBox(dragRect);
+    const qreal shorter = qMin(box.width(), box.height());
+    return roundedRectangleOutline(box, roundedCornerRadius(shorter));
+}
+
 } // namespace
 
 namespace UBShapeGeometry
@@ -111,6 +204,16 @@ QVector<QPointF> circle(const QRectF& dragRect)
 QVector<QPointF> square(const QRectF& dragRect)
 {
     return rectangle(constrainedBox(dragRect));
+}
+
+QVector<QPointF> roundedRectangle(const QRectF& dragRect)
+{
+    return roundedRectanglePoints(dragRect);
+}
+
+QVector<QPointF> roundedSquare(const QRectF& dragRect)
+{
+    return roundedSquarePoints(dragRect);
 }
 
 QVector<QPointF> triangle(const QRectF& dragRect)
@@ -302,7 +405,9 @@ const QVector<ShapeDefinition> sShapes = {
     // The slot keeps its number because settings persist kind values.
     {10, "Equilateral triangle", true, &equilateralTriangle},
     {11, "Right-angle triangle", false, &rightTriangle},
-    {12, "Free triangle", false, &freeTriangle}
+    {12, "Free triangle", false, &freeTriangle},
+    {13, "Rounded rectangle", false, &roundedRectangle},
+    {14, "Rounded square", true, &roundedSquare}
 };
 
 } // namespace
@@ -314,6 +419,12 @@ const QVector<ShapeDefinition>& shapes()
 
 QVector<QPointF> pointsForKind(int kind, const QRectF& dragRect)
 {
+    if (kind == kRoundedRectangleKind)
+        return roundedRectanglePoints(dragRect);
+
+    if (kind == kRoundedSquareKind)
+        return roundedSquarePoints(dragRect);
+
     if (kind < 0 || kind >= sShapes.size())
         kind = 0;
 

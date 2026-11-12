@@ -41,6 +41,8 @@ QVector<QPointF> rectangle(const QRectF& dragRect);
 QVector<QPointF> ellipse(const QRectF& dragRect);
 QVector<QPointF> circle(const QRectF& dragRect);
 QVector<QPointF> square(const QRectF& dragRect);
+QVector<QPointF> roundedRectangle(const QRectF& dragRect);
+QVector<QPointF> roundedSquare(const QRectF& dragRect);
 QVector<QPointF> triangle(const QRectF& dragRect);
 QVector<QPointF> diamond(const QRectF& dragRect);
 QVector<QPointF> parallelogram(const QRectF& dragRect);

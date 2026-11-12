@@ -41,7 +41,7 @@
 constexpr qreal StrokeEraserCircleDiameter = 10.0;
 
 // Number of Shape-tool kinds (0 = rectangle ... 12 = free triangle).
-constexpr int UBShapeKindCount = 13;
+constexpr int UBShapeKindCount = 15;
 
 // Diameter, in device-independent pixels, of the free-triangle apex handle.
 constexpr qreal ShapeHandleDiameter = 14.0;
