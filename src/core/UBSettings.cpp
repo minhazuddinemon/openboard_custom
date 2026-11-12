@@ -698,8 +698,73 @@ void UBSettings::setShapeStrongWidth(qreal width)
 
 int UBSettings::shapeKind()
 {
-    const int kind = boardShapeLastKind->get().toInt();
+    int kind = boardShapeLastKind->get().toInt();
+
+    // The equilateral triangle (10) is merged into the free triangle (12).
+    // Kind numbers stay stable because settings persist them.
+    if (kind == 10)
+        kind = 12;
+
     return (kind >= 0 && kind < UBShapeKindCount) ? kind : 0;
+}
+
+
+QList<int> UBSettings::shapeRecentKinds()
+{
+    QList<int> result;
+
+    const QString stored = value("Board/ShapeRecentKinds", QString()).toString();
+    const QStringList tokens = stored.split(QLatin1Char(','),
+                                            UB::SplitBehavior::SkipEmptyParts);
+
+    for (const QString& token : tokens)
+    {
+        bool ok = false;
+        int kind = token.trimmed().toInt(&ok);
+
+        // The equilateral triangle (10) is merged into the free triangle (12).
+        if (kind == 10)
+            kind = 12;
+
+        if (!ok || kind <= 0 || kind >= UBShapeKindCount)
+            continue;
+        if (!result.contains(kind))
+            result << kind;
+    }
+
+    // Pad with the first-run defaults, never duplicating a valid entry.
+    const int defaults[] = {1, 4};
+    for (int fallback : defaults)
+    {
+        if (result.size() >= 2)
+            break;
+        if (!result.contains(fallback))
+            result << fallback;
+    }
+
+    while (result.size() < 2)
+        result << defaults[0];
+
+    return result.mid(0, 2);
+}
+
+
+void UBSettings::setShapeRecentKinds(const QList<int>& kinds)
+{
+    QStringList tokens;
+    for (int kind : kinds)
+    {
+        if (kind == 10)
+            kind = 12;
+
+        if (kind <= 0 || kind >= UBShapeKindCount)
+            continue;
+        const QString token = QString::number(kind);
+        if (!tokens.contains(token))
+            tokens << token;
+    }
+
+    setValue("Board/ShapeRecentKinds", tokens.join(','));
 }
 
 

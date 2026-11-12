@@ -298,6 +298,8 @@ const QVector<ShapeDefinition> sShapes = {
     {7, "Pentagon", false, &pentagon},
     {8, "Hexagon", false, &hexagon},
     {9, "Star", false, &star},
+    // Reserved: the equilateral triangle is merged into the free triangle (12).
+    // The slot keeps its number because settings persist kind values.
     {10, "Equilateral triangle", true, &equilateralTriangle},
     {11, "Right-angle triangle", false, &rightTriangle},
     {12, "Free triangle", false, &freeTriangle}

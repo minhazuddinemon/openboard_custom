@@ -298,6 +298,10 @@ class UBBoardController : public UBDocumentContainer
         void initBackgroundGridSize();
         void updatePageSizeState();
         void showWidthSliderPopup(QAction *anchorAction, bool lineWidth);
+        void chooseShapeKind(int kind, bool updateRecent);
+        void refreshShapeGroupSelection();
+        void updateShapeRecentActions();
+        void activateLineTool();
         int autosaveTimeoutFromSettings() const;
 
         UBMainWindow *mMainWindow;
@@ -307,6 +311,8 @@ class UBBoardController : public UBDocumentContainer
         UBBoardPaletteManager *mPaletteManager;
         UBToolbarButtonGroup *mEraserWidthChoice;
         UBToolbarButtonGroup *mShapeChoice;
+        QList<QAction*> mShapeRecentActions;
+        QList<int> mShapeRecentKinds;
         int mStrokeEraserActionIndex;
         UBSoftwareUpdateDialog *mSoftwareUpdateDialog;
         UBMessageWindow *mMessageWindow;
@@ -347,7 +353,9 @@ class UBBoardController : public UBDocumentContainer
         void eraserWidthActionActivated(int index);
         void eraserToolChanged(int tool);
         void shapeKindActionActivated(int index);
+        void shapeGroupActionActivated(int index);
         void shapeToolChanged(int tool);
+        void showShapePicker();
         void undoWithShapeCommit();
         void redoWithShapeCommit();
         void libraryDialogClosed(int ret);

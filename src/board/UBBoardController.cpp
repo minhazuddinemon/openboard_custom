@@ -309,6 +309,57 @@ QIcon createShapeKindIcon(int kind)
     return QIcon(pixmap);
 }
 
+QIcon createShapeLineIcon()
+{
+    constexpr int iconSize = 32;
+    constexpr qreal margin = 6.0;
+
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor ink = QApplication::palette().color(QPalette::Text);
+    painter.setPen(QPen(ink, 2.0, Qt::SolidLine, Qt::RoundCap));
+
+    // Plain diagonal line; the Line tool is not a shape kind (yet).
+    painter.drawLine(QPointF(margin, iconSize - margin),
+                     QPointF(iconSize - margin, margin));
+
+    return QIcon(pixmap);
+}
+
+QIcon createMoreShapesIcon()
+{
+    constexpr int iconSize = 32;
+
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const QColor ink = QApplication::palette().color(QPalette::Text);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(ink);
+
+    const qreal dot = 3.0;
+    const qreal step = 8.0;
+    const qreal origin = (iconSize - 2.0 * step) / 2.0;
+
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            painter.drawEllipse(QPointF(origin + column * step,
+                                        origin + row * step), dot / 2.0, dot / 2.0);
+        }
+    }
+
+    return QIcon(pixmap);
+}
+
 } // namespace
 
 UBBoardController::UBBoardController(UBMainWindow* mainWindow)
@@ -718,22 +769,39 @@ void UBBoardController::setupToolbar()
     updateWidthButtonIcons();
 
     //-----------------------------------------------------------//
-    // Setup shape kind choice widget (one button per shape kind).
+    // Setup compact shape group:
+    // [Rectangle][Line][Recent 1][Recent 2][More shapes].
+
+    mShapeRecentKinds = UBSettings::settings()->shapeRecentKinds();
+
+    QAction *shapeRectangle = new QAction(UBShapeGeometry::nameForKind(0),
+                                          mMainWindow->boardToolBar);
+    shapeRectangle->setCheckable(true);
+    shapeRectangle->setToolTip(tr("Draw: %1").arg(UBShapeGeometry::nameForKind(0)));
+    shapeRectangle->setIcon(createShapeKindIcon(0));
+
+    QAction *shapeLine = new QAction(tr("Line"), mMainWindow->boardToolBar);
+    shapeLine->setCheckable(true);
+    shapeLine->setToolTip(tr("Draw a line"));
+    shapeLine->setIcon(createShapeLineIcon());
+
+    QAction *shapeRecent1 = new QAction(tr("Recent shape"), mMainWindow->boardToolBar);
+    shapeRecent1->setCheckable(true);
+
+    QAction *shapeRecent2 = new QAction(tr("Recent shape"), mMainWindow->boardToolBar);
+    shapeRecent2->setCheckable(true);
+
+    mShapeRecentActions.clear();
+    mShapeRecentActions << shapeRecent1 << shapeRecent2;
+
+    QAction *shapeMore = new QAction(tr("More shapes"), mMainWindow->boardToolBar);
+    shapeMore->setCheckable(false);
+    shapeMore->setToolTip(tr("More shapes"));
+    shapeMore->setIcon(createMoreShapesIcon());
 
     QList<QAction *> shapeActions;
-    const QVector<UBShapeGeometry::ShapeDefinition>& shapeDefinitions =
-            UBShapeGeometry::shapes();
-
-    for (const UBShapeGeometry::ShapeDefinition& definition : shapeDefinitions)
-    {
-        const QString name = UBShapeGeometry::nameForKind(definition.kind);
-
-        QAction *action = new QAction(name, mMainWindow->boardToolBar);
-        action->setCheckable(true);
-        action->setToolTip(tr("Draw: %1").arg(name));
-        action->setIcon(createShapeKindIcon(definition.kind));
-        shapeActions << action;
-    }
+    shapeActions << shapeRectangle << shapeLine << shapeRecent1
+                 << shapeRecent2 << shapeMore;
 
     UBToolbarButtonGroup *shapeChoice =
             new UBToolbarButtonGroup(mMainWindow->boardToolBar, shapeActions, "shape");
@@ -741,11 +809,13 @@ void UBBoardController::setupToolbar()
     mShapeChoice = shapeChoice;
 
     connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), shapeChoice, SLOT(displayText(QVariant)));
-    connect(shapeChoice, SIGNAL(activated(int)), this, SLOT(shapeKindActionActivated(int)));
+    connect(shapeChoice, SIGNAL(activated(int)), this, SLOT(shapeGroupActionActivated(int)));
+    connect(shapeMore, SIGNAL(triggered(bool)), this, SLOT(showShapePicker()));
     connect(UBDrawingController::drawingController(), SIGNAL(stylusToolChanged(int, int))
             , this, SLOT(shapeToolChanged(int)));
 
     shapeChoice->displayText(QVariant(false));
+    updateShapeRecentActions();
     shapeToolChanged(UBDrawingController::drawingController()->stylusTool());
 
     mMainWindow->boardToolBar->insertSeparator(mMainWindow->actionBackgrounds);
@@ -2730,30 +2800,223 @@ void UBBoardController::eraserToolChanged(int tool)
 
 void UBBoardController::shapeKindActionActivated(int index)
 {
-    if (index < 0 || index >= UBShapeGeometry::shapeKindCount())
+    chooseShapeKind(index, true);
+}
+
+
+void UBBoardController::shapeGroupActionActivated(int index)
+{
+    if (index == 1)
+    {
+        activateLineTool();
+        return;
+    }
+
+    if (index == 0)
+    {
+        chooseShapeKind(0, false);
+        return;
+    }
+
+    if (index == 2 || index == 3)
+    {
+        const int recentIndex = index - 2;
+        if (recentIndex < mShapeRecentKinds.size())
+            chooseShapeKind(mShapeRecentKinds.at(recentIndex), false);
+    }
+}
+
+
+void UBBoardController::chooseShapeKind(int kind, bool updateRecent)
+{
+    if (kind < 0 || kind >= UBShapeGeometry::shapeKindCount())
         return;
 
-    UBDrawingController* drawingController = UBDrawingController::drawingController();
+    UBDrawingController *drawingController = UBDrawingController::drawingController();
 
-    // Changing the shape kind while the free triangle is being edited finalizes
-    // the current triangle first.
+    // Changing the shape kind while an editable shape is being edited finalizes
+    // the current shape first.
     if (drawingController->stylusTool() == UBStylusTool::Shape && mActiveScene)
         mActiveScene->commitShapeEditing();
 
-    drawingController->setShapeKind(index);
+    drawingController->setShapeKind(kind);
+
+    if (updateRecent && kind != 0)
+    {
+        mShapeRecentKinds.removeAll(kind);
+        mShapeRecentKinds.prepend(kind);
+        while (mShapeRecentKinds.size() > 2)
+            mShapeRecentKinds.removeLast();
+
+        UBSettings::settings()->setShapeRecentKinds(mShapeRecentKinds);
+        updateShapeRecentActions();
+    }
+
+    refreshShapeGroupSelection();
+}
+
+
+void UBBoardController::refreshShapeGroupSelection()
+{
+    if (!mShapeChoice)
+        return;
+
+    UBDrawingController *drawingController = UBDrawingController::drawingController();
+    const int tool = drawingController->stylusTool();
+
+    if (tool == UBStylusTool::Line)
+    {
+        mShapeChoice->setCurrentIndex(1);
+        return;
+    }
+
+    if (tool == UBStylusTool::Shape)
+    {
+        const int kind = drawingController->shapeKind();
+        int index = -1;
+
+        if (kind == 0)
+            index = 0;
+        else if (mShapeRecentKinds.size() > 0 && kind == mShapeRecentKinds.at(0))
+            index = 2;
+        else if (mShapeRecentKinds.size() > 1 && kind == mShapeRecentKinds.at(1))
+            index = 3;
+
+        if (index >= 0)
+            mShapeChoice->setCurrentIndex(index);
+        else
+            mShapeChoice->clearSelection();
+        return;
+    }
+
+    mShapeChoice->clearSelection();
+}
+
+
+void UBBoardController::updateShapeRecentActions()
+{
+    for (int i = 0; i < mShapeRecentActions.size(); ++i)
+    {
+        QAction *action = mShapeRecentActions.at(i);
+        if (!action)
+            continue;
+
+        if (i < mShapeRecentKinds.size())
+        {
+            const int kind = mShapeRecentKinds.at(i);
+            const QString name = UBShapeGeometry::nameForKind(kind);
+            action->setIcon(createShapeKindIcon(kind));
+            action->setText(name);
+            action->setToolTip(tr("Draw: %1").arg(name));
+            action->setVisible(true);
+        }
+        else
+        {
+            action->setVisible(false);
+        }
+    }
+}
+
+
+void UBBoardController::activateLineTool()
+{
+    // Kept isolated so a later phase can turn this into an open-shape kind.
+    UBDrawingController::drawingController()->setStylusTool(UBStylusTool::Line);
 }
 
 
 void UBBoardController::shapeToolChanged(int tool)
 {
-    if (!mShapeChoice)
-        return;
+    Q_UNUSED(tool);
+    refreshShapeGroupSelection();
+}
 
-    if (tool == UBStylusTool::Shape)
-        mShapeChoice->setCurrentIndex(qBound(0, UBSettings::settings()->shapeKind(),
-                                             UBShapeGeometry::shapeKindCount() - 1));
-    else
-        mShapeChoice->clearSelection();
+
+void UBBoardController::showShapePicker()
+{
+    QAction *anchorAction = qobject_cast<QAction *>(sender());
+
+    // Follow the existing showWidthSliderPopup() pattern: a QMenu hosting a
+    // QWidgetAction, executed under the anchor button. QMenu handles closing on
+    // outside click/Escape and keeps itself on screen.
+    QMenu menu(mMainWindow);
+
+    QWidget *container = new QWidget();
+    QVBoxLayout *layout = new QVBoxLayout(container);
+
+    QLabel *title = new QLabel(tr("Shapes"), container);
+    QFont titleFont = title->font();
+    titleFont.setBold(true);
+    title->setFont(titleFont);
+    layout->addWidget(title);
+
+    QGridLayout *grid = new QGridLayout();
+    grid->setSpacing(2);
+
+    const int currentKind = UBSettings::settings()->shapeKind();
+    constexpr int columns = 4;
+
+    QButtonGroup *buttonGroup = new QButtonGroup(container);
+    buttonGroup->setExclusive(true);
+
+    const QVector<UBShapeGeometry::ShapeDefinition>& definitions =
+            UBShapeGeometry::shapes();
+
+    int position = 0;
+
+    for (int i = 0; i < definitions.size(); ++i)
+    {
+        const UBShapeGeometry::ShapeDefinition& definition = definitions.at(i);
+
+        // Equilateral triangle (10) is merged into the free triangle (12).
+        if (definition.kind == 10)
+            continue;
+
+        QToolButton *button = new QToolButton(container);
+        button->setIcon(createShapeKindIcon(definition.kind));
+        button->setIconSize(QSize(32, 32));
+        button->setFixedSize(40, 40);
+        button->setCheckable(true);
+        button->setChecked(definition.kind == currentKind);
+        button->setToolTip(tr("Draw: %1")
+                           .arg(UBShapeGeometry::nameForKind(definition.kind)));
+        button->setAutoRaise(true);
+
+        buttonGroup->addButton(button);
+        grid->addWidget(button, position / columns, position % columns);
+        ++position;
+
+        const int kind = definition.kind;
+        connect(button, &QToolButton::clicked, this, [this, kind, &menu]()
+        {
+            shapeKindActionActivated(kind);
+            menu.close();
+        });
+    }
+
+    layout->addLayout(grid);
+    layout->setContentsMargins(8, 6, 8, 8);
+    container->setLayout(layout);
+
+    QWidgetAction *widgetAction = new QWidgetAction(&menu);
+    widgetAction->setDefaultWidget(container);
+    menu.addAction(widgetAction);
+
+    QWidget *anchor = mMainWindow->boardToolBar;
+    if (anchorAction)
+    {
+        const QList<QWidget *> widgets = anchorAction->associatedWidgets();
+        for (QWidget *widget : widgets)
+        {
+            if (qobject_cast<QToolButton *>(widget))
+            {
+                anchor = widget;
+                break;
+            }
+        }
+    }
+
+    menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
 }
 
 
