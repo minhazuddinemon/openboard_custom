@@ -27,11 +27,6 @@ constexpr int kGlowAlpha = 90;
 
 // Minimum distance between two recorded points (scene units).
 constexpr qreal kMinPointDistance = 0.5;
-
-// Upper bound on recorded points. When exceeded, older points are
-// simplified away (every other interior point), which bounds the render
-// cost of very long strokes without ever breaking the line.
-constexpr int kMaxPoints = 512;
 } // namespace
 
 UBGraphicsLaserStroke::UBGraphicsLaserStroke(const QColor &color,
@@ -68,35 +63,7 @@ void UBGraphicsLaserStroke::appendPoint(const QPointF &point) {
   }
 
   mLastPoint = point;
-  mPoints.append(point);
-
-  if (mPoints.size() > kMaxPoints)
-    simplifyPath();
-
   update();
-}
-
-void UBGraphicsLaserStroke::simplifyPath() {
-  if (mPoints.size() < 8)
-    return;
-
-  // Keep the endpoints and every other interior point. Consecutive
-  // retained points are still connected, so the line never gets a gap;
-  // older portions simply become coarser the longer the stroke grows.
-  QVector<QPointF> reduced;
-  reduced.reserve(mPoints.size() / 2 + 2);
-  reduced.append(mPoints.first());
-  for (int i = 1; i + 1 < mPoints.size(); i += 2)
-    reduced.append(mPoints.at(i));
-  reduced.append(mPoints.last());
-
-  mPoints = reduced;
-
-  QPainterPath path(mPoints.first());
-  for (int i = 1; i < mPoints.size(); ++i)
-    path.lineTo(mPoints.at(i));
-  mPath = path;
-  mLastPoint = mPoints.last();
 }
 
 void UBGraphicsLaserStroke::paint(QPainter *painter,

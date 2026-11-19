@@ -18,7 +18,6 @@
 #include <QGraphicsObject>
 #include <QPainterPath>
 #include <QPointF>
-#include <QVector>
 
 /**
  * A transient, glowing stroke used by the virtual laser pointer.
@@ -37,12 +36,6 @@ public:
 
   void appendPoint(const QPointF &point);
 
-  // The trail fades only after the pen is lifted. A negative fade start
-  // means "active" (pen still down): the trail stays fully visible.
-  void startFade(qint64 ms) { mFadeStartMs = ms; }
-  qint64 fadeStartMs() const { return mFadeStartMs; }
-  bool isFading() const { return mFadeStartMs >= 0; }
-
   QRectF boundingRect() const override;
 
 protected:
@@ -55,11 +48,7 @@ private:
   QColor mColor;
   qreal mOuterWidth;
   qreal mInnerWidth;
-  void simplifyPath();
-
   bool mHasPoint;
-  QVector<QPointF> mPoints;
-  qint64 mFadeStartMs{-1};
 };
 
 #endif /* UBGRAPHICSLASERSTROKE_H_ */

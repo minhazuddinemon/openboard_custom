@@ -328,6 +328,8 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mPenCircle(0)
     , mLassoPathItem(0)
     , mLaserTimer(0)
+    , mLaserIdleMs(0)
+    , mLaserCleanupScheduled(false)
     , mDocument(document)
     , mDarkBackground(false)
     , mPageBackground(UBPageBackground::plain)
@@ -413,6 +415,7 @@ UBGraphicsScene::~UBGraphicsScene()
     }
     mLaserStrokes.clear();
     mCurrentLaserStroke.clear();
+    mLaserCleanupScheduled = false;
 
     // disconnect all consumers of this signal at once to speed-up deletion of scene
     disconnect(this, &UBGraphicsScene::zoomChanged, nullptr, nullptr);
@@ -1215,17 +1218,24 @@ void UBGraphicsScene::clearLassoPreview()
     mLassoPath = QPainterPath();
 }
 
-namespace {
-// The trail is fully visible while the pen is down and fades as one piece
-// after release. The fade is short and fixed, independent of stroke length.
-constexpr qint64 LaserFadeMs = 800;
-constexpr int LaserTickMs = 16;
-} // namespace
-
 void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
 {
-    // A new press starts a fresh, active trail. Trails released earlier keep
-    // fading on their own (their fade start is untouched).
+    // Drawing again cancels any pending hold/fade: all previous laser strokes
+    // become fully visible again and new points are appended to the same view.
+    mLaserIdleMs = 0;
+
+    for (int i = mLaserStrokes.size() - 1; i >= 0; --i)
+    {
+        UBGraphicsLaserStroke* previous = mLaserStrokes.at(i);
+        if (!previous)
+        {
+            mLaserStrokes.removeAt(i);
+            continue;
+        }
+
+        previous->setOpacity(1.0);
+    }
+
     QColor color = UBDrawingController::drawingController()->laserColor();
     if (!color.isValid())
         color = QColor(Qt::red);
@@ -1258,93 +1268,128 @@ void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
         mLaserTimer->setTimerType(Qt::PreciseTimer);
         connect(mLaserTimer, &QTimer::timeout, this, &UBGraphicsScene::updateLaserStrokes);
     }
-    // No fading while the pen is down; the timer is (re)started on release.
+
+    if (!mLaserTimer->isActive())
+        mLaserTimer->start(16); // ~60 FPS
 }
 
 void UBGraphicsScene::updateLaserStroke(const QPointF& scenePos)
 {
-    // One continuous path per press: never rotate to a new segment, so fast
-    // strokes cannot leave a gap between chunks.
     if (mCurrentLaserStroke)
         mCurrentLaserStroke->appendPoint(scenePos);
 }
 
 void UBGraphicsScene::finishLaserStroke()
 {
-    // Pen lifted: start the fixed fade for the whole trail.
-    if (mCurrentLaserStroke)
-    {
-        mCurrentLaserStroke->startFade(QDateTime::currentMSecsSinceEpoch());
-        mCurrentLaserStroke.clear();
-    }
-
-    if (mLaserTimer && !mLaserStrokes.isEmpty() && !mLaserTimer->isActive())
-        mLaserTimer->start(LaserTickMs);
+    // Stylus lifted: start the inactivity hold. The fade is driven by
+    // updateLaserStrokes() once neither input nor a live gesture is active.
+    mCurrentLaserStroke.clear();
+    mLaserIdleMs = 0;
 }
 
 void UBGraphicsScene::updateLaserStrokes()
 {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    bool hasFadingTrail = false;
+    constexpr qint64 tickMs = 16;
+    constexpr qint64 holdMs = 1200;
+    constexpr qint64 fadeMs = 600;
 
-    for (int i = mLaserStrokes.size() - 1; i >= 0; --i)
+    if (mLaserStrokes.isEmpty())
     {
-        UBGraphicsLaserStroke* stroke = mLaserStrokes.at(i);
-        if (!stroke)
-        {
-            mLaserStrokes.removeAt(i);
-            continue;
-        }
-
-        if (!stroke->isFading())
-        {
-            // Active trail (pen down): always fully visible.
-            stroke->setOpacity(1.0);
-            continue;
-        }
-
-        hasFadingTrail = true;
-
-        const qint64 age = now - stroke->fadeStartMs();
-        const qreal opacity = qBound<qreal>(
-                0.0, 1.0 - qreal(age) / qreal(LaserFadeMs), 1.0);
-        stroke->setOpacity(opacity);
-
-        if (age < LaserFadeMs)
-            continue;
-
-        // Never the trail currently being drawn (it is not fading anyway).
-        if (stroke == mCurrentLaserStroke)
-            continue;
-
-        mLaserStrokes.removeAt(i);
-        if (stroke->scene() == this)
-            QGraphicsScene::removeItem(stroke);
-        stroke->deleteLater();
+        if (mLaserTimer)
+            mLaserTimer->stop();
+        return;
     }
 
-    // Stop the timer when nothing is fading anymore (or the list is empty).
-    if ((!hasFadingTrail || mLaserStrokes.isEmpty()) && mLaserTimer)
-        mLaserTimer->stop();
+    // Active input guard: never fade or delete items while the user is
+    // drawing (with the laser or any other tool). This prevents deleting an
+    // item that is still referenced by an in-flight input event.
+    if (mInputDeviceIsPressed || mCurrentLaserStroke)
+    {
+        mLaserIdleMs = 0;
+        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+            if (stroke)
+                stroke->setOpacity(1.0);
+        }
+        return;
+    }
+
+    mLaserIdleMs += tickMs;
+
+    if (mLaserIdleMs <= holdMs)
+    {
+        // Hold at full opacity.
+        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+            if (stroke)
+                stroke->setOpacity(1.0);
+        }
+        return;
+    }
+
+    const qreal progress = qreal(mLaserIdleMs - holdMs) / qreal(fadeMs);
+
+    if (progress >= 1.0)
+    {
+        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+            if (stroke)
+                stroke->setOpacity(0.0);
+        }
+        scheduleLaserCleanup();
+        return;
+    }
+
+    const qreal opacity = 1.0 - progress;
+    foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+        if (stroke)
+            stroke->setOpacity(opacity);
+    }
 }
 
-void UBGraphicsScene::clearLaserStrokes()
+void UBGraphicsScene::scheduleLaserCleanup()
 {
-    mCurrentLaserStroke.clear();
+    if (mLaserCleanupScheduled)
+        return;
+
+    // Safety: never schedule deletion while input is active.
+    if (mInputDeviceIsPressed || mCurrentLaserStroke)
+        return;
+
+    mLaserCleanupScheduled = true;
 
     if (mLaserTimer)
         mLaserTimer->stop();
 
-    const QList<QPointer<UBGraphicsLaserStroke>> strokes = mLaserStrokes;
-    mLaserStrokes.clear();
+    // Deleting synchronously from an input/timer callback can leave dangling
+    // pointers in the event pipeline. Defer the cleanup to the next event-loop
+    // iteration and use deleteLater() on the (QObject-based) laser items.
+    QTimer::singleShot(0, this, [this]() {
+        mLaserCleanupScheduled = false;
 
-    foreach (UBGraphicsLaserStroke* stroke, strokes) {
-        if (!stroke)
-            continue;
-        if (stroke->scene() == this)
-            QGraphicsScene::removeItem(stroke);
-        stroke->deleteLater();
-    }
+        if (mInputDeviceIsPressed || mCurrentLaserStroke)
+        {
+            // Drawing resumed: cancel the cleanup and restore visibility.
+            mLaserIdleMs = 0;
+            foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
+                if (stroke)
+                    stroke->setOpacity(1.0);
+            }
+            if (mLaserTimer && !mLaserTimer->isActive())
+                mLaserTimer->start(16);
+            return;
+        }
+
+        const QList<QPointer<UBGraphicsLaserStroke>> strokes = mLaserStrokes;
+        mLaserStrokes.clear();
+
+        foreach (UBGraphicsLaserStroke* stroke, strokes) {
+            if (!stroke)
+                continue;
+
+            if (stroke->scene() == this)
+                QGraphicsScene::removeItem(stroke);
+
+            stroke->deleteLater();
+        }
+    });
 }
 
 void UBGraphicsScene::startLasso(const QPointF& scenePos)
@@ -2803,7 +2848,6 @@ UBItem* UBGraphicsScene::deepCopy() const
 void UBGraphicsScene::clearContent(clearCase pCase)
 {
     clearLassoPreview();
-    clearLaserStrokes();
     cancelShapePreview();
     stopStraightenHold();
 
@@ -3761,9 +3805,6 @@ void UBGraphicsScene::stylusToolChanged(int tool, int previousTool)
 {
     if (tool != previousTool)
     {
-        if (previousTool == UBStylusTool::Laser)
-            finishLaserStroke();
-
         removeShapeAngleLabel();
         removeShapeStrokePreview();
         stopStraightenHold();

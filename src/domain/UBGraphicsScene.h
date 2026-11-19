@@ -507,7 +507,7 @@ signals:
         void updateLaserStroke(const QPointF& scenePos);
         void finishLaserStroke();
         void updateLaserStrokes();
-        void clearLaserStrokes();
+        void scheduleLaserCleanup();
 
         QGraphicsEllipseItem* mEraser;
         QGraphicsEllipseItem* mPointer; // "laser" pointer
@@ -520,6 +520,8 @@ signals:
         QTimer* mLaserTimer;
         QList<QPointer<UBGraphicsLaserStroke>> mLaserStrokes;
         QPointer<UBGraphicsLaserStroke> mCurrentLaserStroke;
+        qint64 mLaserIdleMs;
+        bool mLaserCleanupScheduled;
 
         QSet<QGraphicsItem*> mAddedItems;
         QSet<QGraphicsItem*> mRemovedItems;
