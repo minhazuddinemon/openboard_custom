@@ -34,6 +34,8 @@ public:
     UBThumbnailTextItem(const QString& text);
 
     QRectF boundingRect() const;
+    void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
+               QWidget* widget) override;
 
     void setWidth(qreal pWidth);
     qreal width();

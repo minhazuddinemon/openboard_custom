@@ -106,6 +106,7 @@ class UBDocumentThumbnailsView : public UBThumbnailsView
 
     private:
         std::shared_ptr<UBDocument> mDocument{nullptr};
+        QBrush mBackgroundBrush{};
 
         QString mMimeType;
 

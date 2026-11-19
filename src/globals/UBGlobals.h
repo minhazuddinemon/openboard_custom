@@ -33,18 +33,15 @@
 #include <QString>
 #include <QFile>
 
+#include "core/UBTheme.h"
+
 #define DELETEPTR(ptr) if(NULL != ptr){ \
     delete ptr; \
     ptr = NULL; \
     }
 
 #define SET_STYLE_SHEET() {\
-    setAttribute(Qt::WA_StyledBackground, true);\
-    QString style;\
-    QFile f(":style.qss");\
-    if(f.exists() && f.open(QIODevice::ReadOnly))\
-            style = QString(f.readAll());\
-     setStyleSheet(style);\
+    UBTheme::applyDockStyleSheet(this);\
 }
 
 #ifdef Q_OS_WIN

@@ -24,6 +24,7 @@
 
 #include "adaptors/UBThumbnailAdaptor.h"
 #include "core/UBApplication.h"
+#include "core/UBSettings.h"
 #include "document/UBDocument.h"
 #include "document/UBDocumentProxy.h"
 #include "frameworks/UBBackgroundLoader.h"
@@ -69,7 +70,22 @@ void UBThumbnailScene::arrangeThumbnails(int fromIndex, int toIndex)
     const int nbColumns = thumbnailArranger->columnCount();
     const int nbRows = ((mThumbnailItems.size() - 1) / nbColumns) + 1;
 
-    const auto thumbnailHeight = UBThumbnail::heightForWidth(thumbnailWidth);
+    // Use the actual page aspect ratio (from a loaded thumbnail) so a cell is
+    // only as tall as its page image plus the small label strip.
+    double aspectRatio = UBSettings::minScreenRatio;
+    for (UBThumbnail* thumbnail : mThumbnailItems)
+    {
+        if (thumbnail)
+        {
+            const QPixmap pixmap = thumbnail->pixmap();
+            if (!pixmap.isNull() && pixmap.height() > 0)
+            {
+                aspectRatio = double(pixmap.width()) / pixmap.height();
+                break;
+            }
+        }
+    }
+    const auto thumbnailHeight = UBThumbnail::heightForWidth(thumbnailWidth, aspectRatio);
     const QSizeF thumbnailSize{thumbnailWidth, thumbnailHeight};
     auto columnIndex = fromIndex % nbColumns;
     auto rowIndex = fromIndex / nbColumns;

@@ -28,7 +28,8 @@ HEADERS += src/domain/UBGraphicsScene.h \
     src/domain/UBGraphicsItemZLevelUndoCommand.h \
     src/domain/UBGraphicsItemColorUndoCommand.h \
     src/domain/UBGraphicsLaserStroke.h \
-    src/domain/UBShapeGeometry.h
+    src/domain/UBShapeGeometry.h \
+    src/domain/UBSvgMarkerPreprocessor.h
 
 SOURCES += src/domain/UBGraphicsScene.cpp \
     src/domain/UBWebEngineView.cpp \
@@ -60,4 +61,5 @@ SOURCES += src/domain/UBGraphicsScene.cpp \
     src/domain/UBGraphicsItemZLevelUndoCommand.cpp \
     src/domain/UBGraphicsItemColorUndoCommand.cpp \
     src/domain/UBGraphicsLaserStroke.cpp \
-    src/domain/UBShapeGeometry.cpp
+    src/domain/UBShapeGeometry.cpp \
+    src/domain/UBSvgMarkerPreprocessor.cpp

@@ -126,6 +126,7 @@ private slots:
     void lockIt(bool pLock);
 
 private:
+    void updateTheme();
     void switchToListView();
     void switchToProperties();
     void switchToWebView();

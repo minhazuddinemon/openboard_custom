@@ -247,7 +247,7 @@ class UBBoardController : public UBDocumentContainer
         void cut();
         void copy();
         void paste();
-        void processMimeData(const QMimeData* pMimeData, const QPointF& pPos);
+        void processMimeData(const QMimeData* pMimeData, const QPointF& pPos, qreal pImageScale = 1.0);
         void moveGraphicsWidgetToControlView(UBGraphicsWidgetItem* graphicWidget);
         void moveToolWidgetToScene(UBToolWidget* toolWidget);
         void addItem();
@@ -303,6 +303,7 @@ class UBBoardController : public UBDocumentContainer
         void updateShapeRecentActions();
         void activateLineTool();
         int autosaveTimeoutFromSettings() const;
+        std::shared_ptr<UBDocumentProxy> mostRecentlyUsedDocument() const;
 
         UBMainWindow *mMainWindow;
         std::shared_ptr<UBGraphicsScene> mActiveScene;

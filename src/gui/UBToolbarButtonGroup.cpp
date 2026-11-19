@@ -106,6 +106,19 @@ UBToolbarButtonGroup::UBToolbarButtonGroup(QToolBar *toolBar, const QList<QActio
         buttonSize = button->sizeHint();
         i++;
     }
+
+    mObjectNamePrefix = objectNameprefix;
+
+    // The colour swatch group signals its selection by drawing the selected
+    // swatch larger (see swatchIcon); the other top-bar groups get an accent
+    // background. The desktop palettes keep their look.
+    if (objectNameprefix != "desktop" && objectNameprefix != "color")
+    {
+        setStyleSheet("QToolButton:checked {"
+                      " background-color: #2d7ff9;"
+                      " border-radius: 6px;"
+                      " }");
+    }
 }
 
 UBToolbarButtonGroup::~UBToolbarButtonGroup()
@@ -142,10 +155,64 @@ void UBToolbarButtonGroup::setIcon(const QIcon &icon, int index)
 
 void UBToolbarButtonGroup::setColor(const QColor &color, int index)
 {
-    QPixmap pixmap(12, 12);
-    pixmap.fill(color);
-    QIcon icon(pixmap);
-    setIcon(icon, index);
+    // One drawing routine for every swatch group. The fixed colour actions
+    // are shared between the board and the desktop palettes, so using the
+    // same routine everywhere prevents one group from overwriting another
+    // group's icons with a different style.
+    while (mColors.size() <= index)
+        mColors.append(QColor());
+    mColors[index] = color;
+    setIcon(swatchIcon(color, index == mCurrentIndex), index);
+}
+
+QIcon UBToolbarButtonGroup::swatchIcon(const QColor &color, bool selected) const
+{
+    constexpr int iconSize = 32;
+    QPixmap pixmap(iconSize, iconSize);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    // One shape for every swatch: a small square with a slight, fixed
+    // corner rounding. Only the size differs: the unselected swatch is
+    // drawn at the original size with transparent margin, the selected one
+    // grows by about 3 px on each side and fills the cell.
+    const qreal cell = selected ? 30.0 : 22.0;
+    const QRectF rect((iconSize - cell) / 2.0, (iconSize - cell) / 2.0,
+                      cell, cell);
+
+    painter.setBrush(color);
+    if (selected)
+    {
+        // Border in a shade of the swatch itself, chosen to stay visible on
+        // every colour, including white and yellow.
+        const bool lightSwatch = qGray(color.rgb()) >= 200
+                || color.lightness() >= 200;
+        const QColor border = lightSwatch ? color.darker(180)
+                                          : color.lighter(160);
+        painter.setPen(QPen(border, 2.0));
+    }
+    else
+    {
+        painter.setPen(Qt::NoPen);
+    }
+
+    // Same corner rounding for selected and unselected (not scaled with
+    // the size), so the selected swatch is just a bigger copy.
+    constexpr qreal cornerRadius = 3.0;
+    painter.drawRoundedRect(rect, cornerRadius, cornerRadius);
+    painter.end();
+    return QIcon(pixmap);
+}
+
+void UBToolbarButtonGroup::refreshColorIcons()
+{
+    for (int i = 0; i < mColors.size() && i < mButtons.size(); ++i)
+    {
+        if (i < mActions.size() && mActions.at(i)->isCheckable())
+            setIcon(swatchIcon(mColors.at(i), i == mCurrentIndex), i);
+    }
 }
 
 void UBToolbarButtonGroup::selected(QAction *action)
@@ -190,6 +257,7 @@ void UBToolbarButtonGroup::setCurrentIndex(int index)
             mButtons.at(i)->setChecked(i == index);
         }
         mCurrentIndex = index;
+        refreshColorIcons();
         emit currentIndexChanged(index);
     }
 }
@@ -210,6 +278,7 @@ void UBToolbarButtonGroup::clearSelection()
     mActionGroup->setExclusive(exclusive);
 
     mCurrentIndex = -1;
+    refreshColorIcons();
     emit currentIndexChanged(-1);
 }
 

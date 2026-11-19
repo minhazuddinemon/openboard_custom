@@ -130,6 +130,13 @@ void UBDrawingController::setStylusTool(int tool)
         UBStylusTool::Enum previousTool = mStylusTool;
         mStylusTool = (UBStylusTool::Enum)tool;
 
+        // Remember the eraser kind (normal or stroke) so the eraser
+        // button restores it on the next launch.
+        if (mStylusTool == UBStylusTool::Eraser)
+            UBSettings::settings()->setStrokeEraserSelected(false);
+        else if (mStylusTool == UBStylusTool::StrokeEraser)
+            UBSettings::settings()->setStrokeEraserSelected(true);
+
 
         if (mStylusTool == UBStylusTool::Pen)
             UBApplication::mainWindow->actionPen->setChecked(true);
@@ -489,7 +496,9 @@ void UBDrawingController::penToolSelected(bool checked)
 void UBDrawingController::eraserToolSelected(bool checked)
 {
     if (checked)
-        setStylusTool(UBStylusTool::Eraser);
+        setStylusTool(UBSettings::settings()->strokeEraserSelected()
+                      ? UBStylusTool::StrokeEraser
+                      : UBStylusTool::Eraser);
 }
 
 void UBDrawingController::markerToolSelected(bool checked)

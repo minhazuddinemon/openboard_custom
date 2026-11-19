@@ -116,7 +116,8 @@ QDialog QToolButton:pressed
 }
 
 QToolButton#ubButtonGroupLeft,
-QToolButton#desktop-ubButtonGroupLeft
+QToolButton#desktop-ubButtonGroupLeft,
+QToolButton#color-ubButtonGroupLeft
 {
     background: qlineargradient(x1: 0, y1: 0.49, x2: 0, y2: 0.5, stop: 0 #d3d3d3, stop: 1  #c4c4c4);
     margin-top: 1px;
@@ -131,7 +132,8 @@ QToolButton#desktop-ubButtonGroupLeft
 }
 
 QToolButton#ubButtonGroupCenter,
-QToolButton#desktop-ubButtonGroupCenter
+QToolButton#desktop-ubButtonGroupCenter,
+QToolButton#color-ubButtonGroupCenter
 {
     background: qlineargradient(x1: 0, y1: 0.49, x2: 0, y2: 0.5, stop: 0 #d3d3d3, stop: 1  #c4c4c4);
     margin-top: 1px;
@@ -146,7 +148,8 @@ QToolButton#desktop-ubButtonGroupCenter
 }
 
 QToolButton#ubButtonGroupRight,
-QToolButton#desktop-ubButtonGroupRight
+QToolButton#desktop-ubButtonGroupRight,
+QToolButton#color-ubButtonGroupRight
 {
     background: qlineargradient(x1: 0, y1: 0.49, x2: 0, y2: 0.5, stop: 0 #d3d3d3, stop: 1  #c4c4c4);
     margin-top: 1px;
@@ -180,27 +183,48 @@ QToolButton#ubButtonGroupLeft:checked,
 QToolButton#ubButtonGroupCenter:checked,
 QToolButton#ubButtonGroupRight:checked
 {
-   background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #c3c3c3, stop: 1  #b4b4b4);
+   background-color: #2d7ff9;
+   border-radius: 6px;
 }
 
 QToolButton#ubButtonGroupLeft:checked
 {
-    border-right: 1px solid #444444;
+    border-right: 1px solid #2d7ff9;
     padding-right: 4px;
 }
 
 QToolButton#ubButtonGroupCenter:checked
 {
-    border-left: 1px solid #444444;
-    border-right: 1px solid #444444;
+    border-left: 1px solid #2d7ff9;
+    border-right: 1px solid #2d7ff9;
     padding-right: 4px;
     padding-left: 4px;
 }
 
 QToolButton#ubButtonGroupRight:checked
 {
-    border-left: 1px solid #444444;
+    border-left: 1px solid #2d7ff9;
     padding-left: 4px;
+}
+
+QToolButton#color-ubButtonGroupLeft:checked,
+QToolButton#color-ubButtonGroupCenter:checked,
+QToolButton#color-ubButtonGroupRight:checked
+{
+    /* The selected swatch is signalled by its larger size and own-colour
+       border, so no background highlight (and no white border) here. */
+    background: transparent;
+}
+
+QToolButton#shape-ubButtonGroupLeft:checked,
+QToolButton#shape-ubButtonGroupCenter:checked,
+QToolButton#shape-ubButtonGroupRight:checked,
+QToolButton#shapeStyle-ubButtonGroupLeft:checked,
+QToolButton#shapeStyle-ubButtonGroupCenter:checked,
+QToolButton#shapeStyle-ubButtonGroupRight:checked
+{
+    background-color: #2d7ff9;
+    border-radius: 6px;
 }
 
 QToolButton#ubButtonMenu

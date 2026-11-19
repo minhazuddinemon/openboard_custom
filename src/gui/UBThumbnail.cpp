@@ -24,6 +24,9 @@
 
 #include <QGraphicsPixmapItem>
 #include <QSvgRenderer>
+#include <QRegion>
+
+#include "core/UBSettings.h"
 
 #include "board/UBDrawingController.h"
 #include "document/UBDocument.h"
@@ -36,6 +39,13 @@
 constexpr int cSelectionWidth{8};
 constexpr QMarginsF cSelectionMargins{QMarginsF{} + cSelectionWidth / 2 + 1};
 constexpr int cLabelOffset{5};
+
+// Current-page indicator: a solid accent border (does not affect the item
+// geometry, which still uses cSelectionWidth/cSelectionMargins) plus a
+// translucent accent tint over the thumbnail cell.
+constexpr int cCurrentPageBorderWidth{3};
+constexpr int cCurrentPageTintAlpha{45};
+static const QColor cCurrentPageColor{0x2d, 0x7f, 0xf9};
 
 UBThumbnail::UBThumbnail()
     : mPixmapItem{new QGraphicsPixmapItem{this}}
@@ -230,17 +240,29 @@ void UBThumbnail::adjustThumbnail()
  */
 double UBThumbnail::heightForWidth(double width)
 {
-    const auto height = std::ceil(width / UBSettings::minScreenRatio);
+    return heightForWidth(width, UBSettings::minScreenRatio);
+}
 
-    return height + labelSpacing();
+double UBThumbnail::heightForWidth(double width, double aspectRatio)
+{
+    if (aspectRatio <= 0.0)
+        aspectRatio = UBSettings::minScreenRatio;
+
+    // Only the page image (at the actual page aspect ratio) plus the small
+    // label strip below it; no empty slack under the thumbnail.
+    const auto pixmapHeight = std::ceil(width / aspectRatio);
+
+    return pixmapHeight + labelSpacing();
 }
 
 QVariant UBThumbnail::itemChange(GraphicsItemChange change, const QVariant& value)
 {
     if (change == QGraphicsItem::ItemSelectedHasChanged)
     {
-        const auto penColor = isSelected() ? UBSettings::treeViewBackgroundColor : Qt::transparent;
-        setPen({penColor, cSelectionWidth});
+        const QColor penColor = isSelected() ? cCurrentPageColor
+                                              : QColor(Qt::transparent);
+        setPen({penColor, cCurrentPageBorderWidth});
+        update();
     }
 
     return QGraphicsRectItem::itemChange(change, value);
@@ -272,15 +294,13 @@ void UBThumbnail::mousePressEvent(QGraphicsSceneMouseEvent* event)
     {
         using namespace UBThumbnailUI;
 
-        const auto p = event->pos() - mPixmapItem->pos();
-
-        if (mDeletable && getIcon("close")->triggered(p))
+        if (mDeletable && buttonRect(getIcon("close")->pos()).contains(event->pos()))
         {
             // deleting must be performed later, don't kill yourself
             QTimer::singleShot(0, [this, thumbnailScene]() { thumbnailScene->document()->deletePages({mIndex}); });
             return;
         }
-        else if (getIcon("duplicate")->triggered(p))
+        else if (buttonRect(getIcon("duplicate")->pos()).contains(event->pos()))
         {
             thumbnailScene->document()->duplicatePage(mIndex);
             return;
@@ -292,31 +312,69 @@ void UBThumbnail::mousePressEvent(QGraphicsSceneMouseEvent* event)
 
 void UBThumbnail::paint(QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget)
 {
-    // paint a selection frame but only around the pixmap
+    // Current page: an always-visible accent tint over the cell plus a solid
+    // accent border around the page (drawn even without hover).
     if (isSelected())
     {
-        const auto selectionRect = mapRectFromItem(mPixmapItem, mPixmapItem->boundingRect()) + cSelectionMargins;
+        const QRectF pixmapRect = mapRectFromItem(mPixmapItem, mPixmapItem->boundingRect());
+        const bool dark = UBSettings::settings()->isDarkBackground();
+
+        painter->save();
+        painter->setPen(Qt::NoPen);
+        QColor tint = cCurrentPageColor;
+        tint.setAlpha(cCurrentPageTintAlpha);
+        painter->setBrush(tint);
+
+        if (dark)
+        {
+            // Dark mode: keep the accent in the margins/label strip only, so
+            // the page image is not covered by a light-blue veil.
+            QRegion clip(rect().toRect());
+            clip -= QRegion(pixmapRect.toRect());
+            painter->setClipRegion(clip);
+        }
+        painter->drawRoundedRect(rect(), 4, 4);
+        painter->restore();
+
+        const auto selectionRect = pixmapRect + cSelectionMargins;
         painter->setPen(pen());
         painter->drawRect(selectionRect);
     }
 
-    // paint the buttons
+    // paint the buttons in the top-right corner of the page pixmap
     if (mEditable)
     {
         using namespace UBThumbnailUI; //should be reworked so icons' scale adapts to what's needed
         const UBThumbnailUIIcon& closeThumbnailIcon = *UBThumbnailUI::getIcon(mDeletable ? "close" : "closeDisabled");
         const UBThumbnailUIIcon& duplicateThumbnailIcon = *UBThumbnailUI::getIcon("duplicate");
-        painter->drawPixmap(mPixmapItem->x() + (closeThumbnailIcon.pos() * (ICONSIZE + ICONSPACING)), 0, ICONSIZE, ICONSIZE, closeThumbnailIcon);
-        painter->drawPixmap(mPixmapItem->x() + (duplicateThumbnailIcon.pos() * (ICONSIZE + ICONSPACING)), 0, ICONSIZE, ICONSIZE, duplicateThumbnailIcon);
+        painter->drawPixmap(buttonRect(closeThumbnailIcon.pos()), closeThumbnailIcon,
+                            QRectF(closeThumbnailIcon.rect()));
+        painter->drawPixmap(buttonRect(duplicateThumbnailIcon.pos()), duplicateThumbnailIcon,
+                            QRectF(duplicateThumbnailIcon.rect()));
     }
 
     // do not call superclass - do not paint the rectangle itself or the default dashed selection rectangle
 }
 
+QRectF UBThumbnail::buttonRect(int slot) const
+{
+    using namespace UBThumbnailUI;
+
+    // The pixmap may be scaled and centred; use its position in this item's
+    // coordinate system so the buttons sit in its top-right corner.
+    const QRectF pixmapRect =
+            mPixmapItem->mapRectToParent(mPixmapItem->boundingRect());
+
+    // Slot 0 is right-aligned to the pixmap's right edge, higher slots go left.
+    const qreal x = pixmapRect.right() - (slot + 1) * ICONSIZE
+            - slot * ICONSPACING;
+    return QRectF(x, pixmapRect.top(), ICONSIZE, ICONSIZE);
+}
+
 int UBThumbnail::labelSpacing()
 {
-    // identical and static all over the application
-    static int labelSpacing{UBSettings::thumbnailSpacing + QFontMetrics{QFont{}}.height()};
+    // Small strip below the page image for the "Page N" caption.
+    static int labelSpacing{QFontMetrics{QFont{}}.height() + 8};
 
     return labelSpacing;
 }

@@ -66,6 +66,7 @@ protected:
 
 private:
     void updateTime();
+    void updateLabelStyle();
     int customMargin();
     int border();
 

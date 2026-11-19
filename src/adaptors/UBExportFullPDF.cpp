@@ -34,6 +34,7 @@
 #include <QPrinter>
 
 #include "core/UBApplication.h"
+#include "core/UBHealthMonitor.h"
 #include "core/UBDisplayManager.h"
 #include "core/UBSettings.h"
 #include "core/UBSetting.h"
@@ -81,6 +82,9 @@ void UBExportFullPDF::saveOverlayPdf(std::shared_ptr<UBDocumentProxy> pDocumentP
 {
     if (!pDocumentProxy || filename.length() == 0 || pDocumentProxy->pageCount() == 0)
         return;
+
+    UBHealthMonitor::breadcrumb("pdf export start (full)");
+    UBHealthMonitor::snapshot("pdf-export-start");
 
     /*
         PDFMerger is supposed to be working only for PDFs using 1.0 to 1.4 standard, but I encountered no issue using 1.7 documents.
@@ -147,8 +151,11 @@ void UBExportFullPDF::saveOverlayPdf(std::shared_ptr<UBDocumentProxy> pDocumentP
             // do not draw background color and grid if scene has PDF background
             if (sceneHasPDFBackground)
             {
+                // Only suppress the scene's own page fill/grid. Do NOT call
+                // setBackground(false): that switches the scene to the light
+                // theme and recolors every stroke to its light-palette twin,
+                // which is wrong when the original (dark) PDF stays underneath.
                 scene->setDrawingMode(true);
-                scene->setBackground(false, UBPageBackground::plain);
             }
             else if (UBSettings::settings()->exportBackgroundGrid->get().toBool())
             {
@@ -209,6 +216,9 @@ void UBExportFullPDF::saveOverlayPdf(std::shared_ptr<UBDocumentProxy> pDocumentP
     {
         mSimpleExporter->persistsDocument(pDocumentProxy, filename);
     }
+
+    UBHealthMonitor::breadcrumb("pdf export end (full)");
+    UBHealthMonitor::snapshot("pdf-export-end");
 }
 
 

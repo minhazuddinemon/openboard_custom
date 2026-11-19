@@ -40,6 +40,7 @@
 #include "frameworks/UBGeometryUtils.h"
 
 #include "core/UBApplication.h"
+#include "core/UBHealthMonitor.h"
 #include "core/UBSettings.h"
 #include "core/UBApplicationController.h"
 #include "core/UBPersistenceManager.h"
@@ -327,8 +328,6 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mPenCircle(0)
     , mLassoPathItem(0)
     , mLaserTimer(0)
-    , mLaserIdleMs(0)
-    , mLaserCleanupScheduled(false)
     , mDocument(document)
     , mDarkBackground(false)
     , mPageBackground(UBPageBackground::plain)
@@ -342,6 +341,7 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mShapeEditing(false)
     , mShapeHandleDragging(false)
     , mShapeForceCommit(false)
+    , mAxisAlignAxis(0)
     , mShapeEditingKind(0)
     , mShapeHandle(0)
     , mShapeAngleLabel(0)
@@ -356,6 +356,12 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
     , mZLayerController(new UBZLayerController(this))
     , mpLastPolygon(NULL)
     , mTempPolygon(NULL)
+    , mStraightenTimer(0)
+    , mStraightenPending(false)
+    , mStraightenActive(false)
+    , mStraightenWidth(0)
+    , mStraightenPathLength(0)
+    , mStraightenPolygon(NULL)
     , mDrawWithCompass(false)
     , mCurrentPolygon(0)
     , mSelectionFrame(0)
@@ -390,6 +396,8 @@ UBGraphicsScene::UBGraphicsScene(std::shared_ptr<UBDocumentProxy> document, bool
 
 UBGraphicsScene::~UBGraphicsScene()
 {
+    stopStraightenHold();
+
     mShapeEditing = false;
     mShapeHandleDragging = false;
     removeShapeHandle();
@@ -405,7 +413,6 @@ UBGraphicsScene::~UBGraphicsScene()
     }
     mLaserStrokes.clear();
     mCurrentLaserStroke.clear();
-    mLaserCleanupScheduled = false;
 
     // disconnect all consumers of this signal at once to speed-up deletion of scene
     disconnect(this, &UBGraphicsScene::zoomChanged, nullptr, nullptr);
@@ -522,11 +529,20 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
                     // is nothing to draw until the pointer moves.
                     mShapeStartPoint = pos;
                     mShapeGestureActive = true;
+                    mAxisAlignAxis = 0;
                 }
                 else
                 {
                     drawLineTo(pos, width, isLine);
                     mCurrentStroke->addPoint(pos, width);
+
+                    // Hold-to-straighten: Pen and Marker strokes become a
+                    // straight line when the pen is held still.
+                    if (currentTool == UBStylusTool::Pen
+                            || currentTool == UBStylusTool::Marker)
+                    {
+                        startStraightenHold(pos);
+                    }
                 }
             }
             accepted = true;
@@ -579,6 +595,56 @@ bool UBGraphicsScene::inputDevicePress(const QPointF& scenePos, const qreal& pre
     return accepted;
 }
 
+// When the magnet is off, make a line that is close to an axis exactly
+// horizontal or vertical. The start stays fixed; only the end moves. A
+// small capture angle plus hysteresis keeps deliberate slopes free and
+// stops the snap from flickering when the pen jitters near the boundary.
+QPointF UBGraphicsScene::alignLineEndToAxis(const QPointF& start, const QPointF& end)
+{
+    const qreal dx = end.x() - start.x();
+    const qreal dy = end.y() - start.y();
+    const qreal length = std::sqrt(dx * dx + dy * dy);
+
+    // Short lines change angle a lot for tiny movements: never align them.
+    const qreal minLength = AxisAlignMinLength
+            / (UBApplication::boardController->systemScaleFactor()
+               * UBApplication::boardController->currentZoom());
+    if (length < minLength)
+    {
+        mAxisAlignAxis = 0;
+        return end;
+    }
+
+    constexpr qreal radToDeg = 180.0 / 3.14159265358979323846;
+    const qreal angleFromHorizontal =
+            std::atan2(std::fabs(dy), std::fabs(dx)) * radToDeg;
+    const qreal angleFromVertical = 90.0 - angleFromHorizontal;
+
+    // Hysteresis: once snapped to an axis, hold it until the angle leaves
+    // the wider release band; otherwise only snap inside the capture band.
+    int axis = mAxisAlignAxis;
+    if (axis == 1 && angleFromHorizontal > AxisAlignReleaseDegrees)
+        axis = 0;
+    else if (axis == 2 && angleFromVertical > AxisAlignReleaseDegrees)
+        axis = 0;
+
+    if (axis == 0)
+    {
+        if (angleFromHorizontal <= AxisAlignToleranceDegrees)
+            axis = 1;
+        else if (angleFromVertical <= AxisAlignToleranceDegrees)
+            axis = 2;
+    }
+
+    mAxisAlignAxis = axis;
+
+    if (axis == 1)
+        return QPointF(end.x(), start.y());
+    if (axis == 2)
+        return QPointF(start.x(), end.y());
+    return end;
+}
+
 bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pressure, Qt::KeyboardModifiers modifiers)
 {
     bool accepted = false;
@@ -592,6 +658,15 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
     // same grid as the old Line tool when the magnet is on.
     if (currentTool == UBStylusTool::Shape && isSnapping())
         position += snap(position);
+
+    // Without the magnet, straighten near-axis open shapes (line, arrow,
+    // double arrow). This runs before mCurrentPoint is stored so the live
+    // preview and the committed stroke use the same corrected endpoint.
+    if (currentTool == UBStylusTool::Shape && mShapeGestureActive
+            && !isSnapping() && dc->shapeKind() >= UBShapeLineKind)
+    {
+        position = alignLineEndToAxis(mShapeStartPoint, position);
+    }
 
     mCurrentPoint = position;
 
@@ -776,6 +851,36 @@ bool UBGraphicsScene::inputDeviceMove(const QPointF& scenePos, const qreal& pres
             }
 
             else {
+                mStraightenPathLength += QLineF(mStraightenEndPoint, position).length();
+                mStraightenEndPoint = position;
+
+                if (mStraightenActive)
+                {
+                    QPointF lineEnd = position;
+                    if (isSnapping())
+                        lineEnd += snap(lineEnd);
+                    else
+                        lineEnd = alignLineEndToAxis(mStraightenStartPoint, lineEnd);
+
+                    updateStraightenedLine(lineEnd);
+                    return true;
+                }
+
+                if (mStraightenPending)
+                {
+                    const qreal tolerance = StraightenHoldTolerance
+                            / (UBApplication::boardController->systemScaleFactor()
+                               * UBApplication::boardController->currentZoom());
+                    if (QLineF(mStraightenHoldAnchor, position).length() > tolerance)
+                    {
+                        // The pen moved away from where it last rested: measure
+                        // the next still period from the new position.
+                        mStraightenHoldAnchor = position;
+                        if (mStraightenTimer)
+                            mStraightenTimer->start(StraightenHoldTimeoutMs);
+                    }
+                }
+
                 bool interpolate = false;
 
                 if ((currentTool == UBStylusTool::Pen && UBSettings::settings()->boardInterpolatePenStrokes->get().toBool())
@@ -851,6 +956,7 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
     bool accepted = false;
 
     removeShapeAngleLabel();
+    stopStraightenHold();
 
     if (mPointer)
     {
@@ -1022,6 +1128,9 @@ bool UBGraphicsScene::inputDeviceRelease(int tool, Qt::KeyboardModifiers modifie
             mAddedItems << pStrokes;
             addItem(pStrokes);
 
+            if (currentTool == UBStylusTool::Shape)
+                UBHealthMonitor::breadcrumb("shape commit");
+
             if (currentTool == UBStylusTool::Marker)
             {
                 // Highlighters must sit underneath pen ink, but must not drop
@@ -1106,24 +1215,17 @@ void UBGraphicsScene::clearLassoPreview()
     mLassoPath = QPainterPath();
 }
 
+namespace {
+// The trail is fully visible while the pen is down and fades as one piece
+// after release. The fade is short and fixed, independent of stroke length.
+constexpr qint64 LaserFadeMs = 800;
+constexpr int LaserTickMs = 16;
+} // namespace
+
 void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
 {
-    // Drawing again cancels any pending hold/fade: all previous laser strokes
-    // become fully visible again and new points are appended to the same view.
-    mLaserIdleMs = 0;
-
-    for (int i = mLaserStrokes.size() - 1; i >= 0; --i)
-    {
-        UBGraphicsLaserStroke* previous = mLaserStrokes.at(i);
-        if (!previous)
-        {
-            mLaserStrokes.removeAt(i);
-            continue;
-        }
-
-        previous->setOpacity(1.0);
-    }
-
+    // A new press starts a fresh, active trail. Trails released earlier keep
+    // fading on their own (their fade start is untouched).
     QColor color = UBDrawingController::drawingController()->laserColor();
     if (!color.isValid())
         color = QColor(Qt::red);
@@ -1156,128 +1258,93 @@ void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
         mLaserTimer->setTimerType(Qt::PreciseTimer);
         connect(mLaserTimer, &QTimer::timeout, this, &UBGraphicsScene::updateLaserStrokes);
     }
-
-    if (!mLaserTimer->isActive())
-        mLaserTimer->start(16); // ~60 FPS
+    // No fading while the pen is down; the timer is (re)started on release.
 }
 
 void UBGraphicsScene::updateLaserStroke(const QPointF& scenePos)
 {
+    // One continuous path per press: never rotate to a new segment, so fast
+    // strokes cannot leave a gap between chunks.
     if (mCurrentLaserStroke)
         mCurrentLaserStroke->appendPoint(scenePos);
 }
 
 void UBGraphicsScene::finishLaserStroke()
 {
-    // Stylus lifted: start the inactivity hold. The fade is driven by
-    // updateLaserStrokes() once neither input nor a live gesture is active.
-    mCurrentLaserStroke.clear();
-    mLaserIdleMs = 0;
+    // Pen lifted: start the fixed fade for the whole trail.
+    if (mCurrentLaserStroke)
+    {
+        mCurrentLaserStroke->startFade(QDateTime::currentMSecsSinceEpoch());
+        mCurrentLaserStroke.clear();
+    }
+
+    if (mLaserTimer && !mLaserStrokes.isEmpty() && !mLaserTimer->isActive())
+        mLaserTimer->start(LaserTickMs);
 }
 
 void UBGraphicsScene::updateLaserStrokes()
 {
-    constexpr qint64 tickMs = 16;
-    constexpr qint64 holdMs = 1200;
-    constexpr qint64 fadeMs = 600;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool hasFadingTrail = false;
 
-    if (mLaserStrokes.isEmpty())
+    for (int i = mLaserStrokes.size() - 1; i >= 0; --i)
     {
-        if (mLaserTimer)
-            mLaserTimer->stop();
-        return;
-    }
-
-    // Active input guard: never fade or delete items while the user is
-    // drawing (with the laser or any other tool). This prevents deleting an
-    // item that is still referenced by an in-flight input event.
-    if (mInputDeviceIsPressed || mCurrentLaserStroke)
-    {
-        mLaserIdleMs = 0;
-        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
-            if (stroke)
-                stroke->setOpacity(1.0);
+        UBGraphicsLaserStroke* stroke = mLaserStrokes.at(i);
+        if (!stroke)
+        {
+            mLaserStrokes.removeAt(i);
+            continue;
         }
-        return;
-    }
 
-    mLaserIdleMs += tickMs;
-
-    if (mLaserIdleMs <= holdMs)
-    {
-        // Hold at full opacity.
-        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
-            if (stroke)
-                stroke->setOpacity(1.0);
+        if (!stroke->isFading())
+        {
+            // Active trail (pen down): always fully visible.
+            stroke->setOpacity(1.0);
+            continue;
         }
-        return;
+
+        hasFadingTrail = true;
+
+        const qint64 age = now - stroke->fadeStartMs();
+        const qreal opacity = qBound<qreal>(
+                0.0, 1.0 - qreal(age) / qreal(LaserFadeMs), 1.0);
+        stroke->setOpacity(opacity);
+
+        if (age < LaserFadeMs)
+            continue;
+
+        // Never the trail currently being drawn (it is not fading anyway).
+        if (stroke == mCurrentLaserStroke)
+            continue;
+
+        mLaserStrokes.removeAt(i);
+        if (stroke->scene() == this)
+            QGraphicsScene::removeItem(stroke);
+        stroke->deleteLater();
     }
 
-    const qreal progress = qreal(mLaserIdleMs - holdMs) / qreal(fadeMs);
-
-    if (progress >= 1.0)
-    {
-        foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
-            if (stroke)
-                stroke->setOpacity(0.0);
-        }
-        scheduleLaserCleanup();
-        return;
-    }
-
-    const qreal opacity = 1.0 - progress;
-    foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
-        if (stroke)
-            stroke->setOpacity(opacity);
-    }
+    // Stop the timer when nothing is fading anymore (or the list is empty).
+    if ((!hasFadingTrail || mLaserStrokes.isEmpty()) && mLaserTimer)
+        mLaserTimer->stop();
 }
 
-void UBGraphicsScene::scheduleLaserCleanup()
+void UBGraphicsScene::clearLaserStrokes()
 {
-    if (mLaserCleanupScheduled)
-        return;
-
-    // Safety: never schedule deletion while input is active.
-    if (mInputDeviceIsPressed || mCurrentLaserStroke)
-        return;
-
-    mLaserCleanupScheduled = true;
+    mCurrentLaserStroke.clear();
 
     if (mLaserTimer)
         mLaserTimer->stop();
 
-    // Deleting synchronously from an input/timer callback can leave dangling
-    // pointers in the event pipeline. Defer the cleanup to the next event-loop
-    // iteration and use deleteLater() on the (QObject-based) laser items.
-    QTimer::singleShot(0, this, [this]() {
-        mLaserCleanupScheduled = false;
+    const QList<QPointer<UBGraphicsLaserStroke>> strokes = mLaserStrokes;
+    mLaserStrokes.clear();
 
-        if (mInputDeviceIsPressed || mCurrentLaserStroke)
-        {
-            // Drawing resumed: cancel the cleanup and restore visibility.
-            mLaserIdleMs = 0;
-            foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
-                if (stroke)
-                    stroke->setOpacity(1.0);
-            }
-            if (mLaserTimer && !mLaserTimer->isActive())
-                mLaserTimer->start(16);
-            return;
-        }
-
-        const QList<QPointer<UBGraphicsLaserStroke>> strokes = mLaserStrokes;
-        mLaserStrokes.clear();
-
-        foreach (UBGraphicsLaserStroke* stroke, strokes) {
-            if (!stroke)
-                continue;
-
-            if (stroke->scene() == this)
-                QGraphicsScene::removeItem(stroke);
-
-            stroke->deleteLater();
-        }
-    });
+    foreach (UBGraphicsLaserStroke* stroke, strokes) {
+        if (!stroke)
+            continue;
+        if (stroke->scene() == this)
+            QGraphicsScene::removeItem(stroke);
+        stroke->deleteLater();
+    }
 }
 
 void UBGraphicsScene::startLasso(const QPointF& scenePos)
@@ -2456,66 +2523,87 @@ qreal UBGraphicsScene::zForNewMarkerStroke(const QGraphicsItem* markerStroke) co
         return false;
     };
 
-    const auto sceneItems = items();
+    const qreal defaultZ = markerStroke->zValue();
+    const QRectF area = markerStroke->sceneBoundingRect();
 
+    // Only items whose area overlaps the new highlighter matter for layering.
+    // Content items are ObjectItem/BackgroundItem; tools, controls, overlays
+    // and the selection frame use other layer types and are ignored.
+    QList<QGraphicsItem*> overlapping;
+    const auto sceneItems = items();
+    for (QGraphicsItem* item : sceneItems) {
+        if (!item || item == markerStroke || item->parentItem())
+            continue;
+        if (!item->isVisible())
+            continue;
+
+        const int layer = item->data(UBGraphicsItemData::itemLayerType).toInt();
+        if (layer != itemLayerType::ObjectItem
+                && layer != itemLayerType::BackgroundItem)
+            continue;
+
+        if (!item->sceneBoundingRect().intersects(area))
+            continue;
+
+        overlapping.append(item);
+    }
+
+    // Highest overlapping non-stroke item (image, PDF page, widget, ...).
+    qreal highestObjectZ = 0.0;
+    bool hasObject = false;
+
+    // Lowest overlapping pen (opaque) stroke.
     qreal lowestPenZ = 0.0;
     bool hasPen = false;
-    qreal highestHighlighterZ = 0.0;
-    bool hasHighlighter = false;
 
-    for (QGraphicsItem* item : sceneItems) {
-        if (!item || item == markerStroke || item->parentItem())
-            continue;
-
-        if (item->type() != UBGraphicsStrokesGroup::Type)
-            continue;
-
-        if (isHighlighterGroup(item)) {
-            if (!hasHighlighter || item->zValue() > highestHighlighterZ) {
-                highestHighlighterZ = item->zValue();
-                hasHighlighter = true;
+    for (QGraphicsItem* item : overlapping) {
+        if (item->type() == UBGraphicsStrokesGroup::Type) {
+            if (isHighlighterGroup(item))
+                continue;
+            const qreal z = item->zValue();
+            if (!hasPen || z < lowestPenZ) {
+                lowestPenZ = z;
+                hasPen = true;
+            }
+        } else {
+            const qreal z = item->zValue();
+            if (!hasObject || z > highestObjectZ) {
+                highestObjectZ = z;
+                hasObject = true;
             }
         }
-        else if (!hasPen || item->zValue() < lowestPenZ) {
-            lowestPenZ = item->zValue();
-            hasPen = true;
-        }
     }
 
-    // No pen ink on the page: keep the normal, freshly assigned z-value.
+    // No overlapping pen ink: keep the freshly assigned z-value (on top).
     if (!hasPen)
-        return markerStroke->zValue();
+        return defaultZ;
 
-    // Highest non-stroke item that already sits below the lowest pen stroke.
-    qreal lowerBound = 0.0;
-    bool hasLowerBound = false;
+    // No overlapping object: go just below the lowest overlapping pen stroke.
+    if (!hasObject)
+        return lowestPenZ - 0.5;
 
-    for (QGraphicsItem* item : sceneItems) {
-        if (!item || item == markerStroke || item->parentItem())
+    // Lowest overlapping pen stroke that lies above the highest object.
+    qreal lowestPenAboveObjectZ = 0.0;
+    bool hasPenAboveObject = false;
+    for (QGraphicsItem* item : overlapping) {
+        if (item->type() != UBGraphicsStrokesGroup::Type
+                || isHighlighterGroup(item))
             continue;
-        if (item->type() == UBGraphicsStrokesGroup::Type)
-            continue;
-
         const qreal z = item->zValue();
-        if (z < lowestPenZ && (!hasLowerBound || z > lowerBound)) {
-            lowerBound = z;
-            hasLowerBound = true;
+        if (z > highestObjectZ
+                && (!hasPenAboveObject || z < lowestPenAboveObjectZ)) {
+            lowestPenAboveObjectZ = z;
+            hasPenAboveObject = true;
         }
     }
 
-    // "Just below" the lowest pen stroke. With the default z step of 1 this
-    // leaves half a step of room.
-    qreal targetZ = lowestPenZ - 0.5;
+    if (hasPenAboveObject) {
+        // Above the object and below the pen stroke that covers it.
+        return (highestObjectZ + lowestPenAboveObjectZ) / 2.0;
+    }
 
-    // Stay above older highlighter strokes when there is room below the pen.
-    if (hasHighlighter && highestHighlighterZ < lowestPenZ && targetZ <= highestHighlighterZ)
-        targetZ = (highestHighlighterZ + lowestPenZ) / 2.0;
-
-    // Never drop below an object that is already below the pen strokes.
-    if (hasLowerBound && targetZ <= lowerBound)
-        targetZ = (lowerBound + lowestPenZ) / 2.0;
-
-    return targetZ;
+    // No pen stroke above the object: sit just above the object.
+    return highestObjectZ + 0.5;
 }
 
 UBGraphicsPolygonItem* UBGraphicsScene::arcToPolygonItem(const QLineF& pStartRadius, qreal pSpanAngle, qreal pWidth)
@@ -2715,7 +2803,9 @@ UBItem* UBGraphicsScene::deepCopy() const
 void UBGraphicsScene::clearContent(clearCase pCase)
 {
     clearLassoPreview();
+    clearLaserStrokes();
     cancelShapePreview();
+    stopStraightenHold();
 
     QSet<QGraphicsItem*> removedItems;
     UBGraphicsItemUndoCommand::GroupDataTable groupsMap;
@@ -3671,8 +3761,12 @@ void UBGraphicsScene::stylusToolChanged(int tool, int previousTool)
 {
     if (tool != previousTool)
     {
+        if (previousTool == UBStylusTool::Laser)
+            finishLaserStroke();
+
         removeShapeAngleLabel();
         removeShapeStrokePreview();
+        stopStraightenHold();
         hideTool();
 
         if (mShapeEditing)
@@ -4430,6 +4524,145 @@ void UBGraphicsScene::simplifyCurrentStroke()
         mPreviousPolygonItems.append(poly);
     }
 
+}
+
+void UBGraphicsScene::startStraightenHold(const QPointF& startPoint)
+{
+    stopStraightenHold();
+
+    // Use the tool's full configured width (pressure treated as 1.0), scaled
+    // like normal strokes, so a low-pressure tablet press does not thin the
+    // straightened line.
+    qreal width = UBDrawingController::drawingController()->currentToolWidth();
+    const UBStylusTool::Enum straightenTool =
+            (UBStylusTool::Enum)UBDrawingController::drawingController()->stylusTool();
+    width *= (straightenTool == UBStylusTool::Marker)
+            ? StraightenMarkerWidthFactor : StraightenPenWidthFactor;
+    width /= UBApplication::boardController->systemScaleFactor();
+    width /= UBApplication::boardController->currentZoom();
+
+    mStraightenStartPoint = startPoint;
+    mStraightenHoldAnchor = startPoint;
+    mAxisAlignAxis = 0;
+    mStraightenEndPoint = startPoint;
+    mStraightenWidth = width;
+    mStraightenPathLength = 0;
+    mStraightenPending = true;
+
+    if (!mStraightenTimer)
+    {
+        mStraightenTimer = new QTimer(this);
+        mStraightenTimer->setSingleShot(true);
+        mStraightenTimer->setTimerType(Qt::PreciseTimer);
+        connect(mStraightenTimer, &QTimer::timeout,
+                this, &UBGraphicsScene::straightenHoldTimeout);
+    }
+
+    mStraightenTimer->start(StraightenHoldTimeoutMs);
+}
+
+void UBGraphicsScene::stopStraightenHold()
+{
+    if (mStraightenTimer)
+        mStraightenTimer->stop();
+
+    mStraightenPending = false;
+    mStraightenActive = false;
+    mStraightenPolygon = NULL;
+}
+
+void UBGraphicsScene::straightenHoldTimeout()
+{
+    if (!mStraightenPending || !mInputDeviceIsPressed)
+        return;
+
+    const UBStylusTool::Enum currentTool =
+            (UBStylusTool::Enum)UBDrawingController::drawingController()->stylusTool();
+
+    if (currentTool != UBStylusTool::Pen && currentTool != UBStylusTool::Marker)
+    {
+        mStraightenPending = false;
+        return;
+    }
+
+    // Do not turn small dots, short strokes or small circles into lines.
+    // Leave the freehand stroke untouched; the hold may re-arm once the pen
+    // moves past the hold tolerance again.
+    const qreal antiScaleRatio = UBApplication::boardController->systemScaleFactor()
+            * UBApplication::boardController->currentZoom();
+    const qreal endDistance = QLineF(mStraightenStartPoint, mStraightenEndPoint).length();
+    if (endDistance < StraightenMinEndDistance / antiScaleRatio
+            || mStraightenPathLength < StraightenMinPathLength / antiScaleRatio)
+    {
+        return;
+    }
+
+    mStraightenPending = false;
+
+    QPointF endPoint = mStraightenEndPoint;
+    if (isSnapping())
+        endPoint += snap(endPoint);
+    else
+        endPoint = alignLineEndToAxis(mStraightenStartPoint, endPoint);
+
+    // Runs from the timer, not from an input event: replacing the freehand
+    // polygons here cannot delete items in the middle of press/move/release.
+    discardStrokeForStraightening();
+
+    moveTo(mStraightenStartPoint);
+
+    UBGraphicsPolygonItem* polygonItem =
+            lineToPolygonItem(QLineF(mStraightenStartPoint, endPoint),
+                              mStraightenWidth);
+    addPolygonItemToCurrentStroke(polygonItem);
+
+    if (mCurrentStroke)
+    {
+        mCurrentStroke->addPoint(mStraightenStartPoint, mStraightenWidth);
+        mCurrentStroke->addPoint(endPoint, mStraightenWidth);
+    }
+
+    mStraightenPolygon = polygonItem;
+    mStraightenActive = true;
+
+    UBHealthMonitor::breadcrumb(QString("straighten fired from (%1,%2) to (%3,%4)")
+                                 .arg(mStraightenStartPoint.x()).arg(mStraightenStartPoint.y())
+                                 .arg(endPoint.x()).arg(endPoint.y()));
+}
+
+void UBGraphicsScene::updateStraightenedLine(const QPointF& endPoint)
+{
+    if (!mStraightenPolygon)
+        return;
+
+    mStraightenPolygon->setPolygon(
+            UBGeometryUtils::lineToPolygon(QLineF(mStraightenStartPoint, endPoint),
+                                           mStraightenWidth));
+}
+
+void UBGraphicsScene::discardStrokeForStraightening()
+{
+    // Detach the scene's raw pointers first: destroying the last polygon
+    // deletes the owning stroke (UBGraphicsPolygonItem::clearStroke()).
+    mCurrentStroke = NULL;
+    mpLastPolygon = NULL;
+
+    if (mTempPolygon)
+    {
+        removeItem(mTempPolygon);
+        mTempPolygon = NULL;
+    }
+
+    mPreviousPolygonItems.clear();
+
+    const QSet<QGraphicsItem*> strokeItems = mAddedItems;
+    mAddedItems.clear();
+
+    for (QGraphicsItem* item : strokeItems)
+    {
+        removeItem(item);
+        UBCoreGraphicsScene::deleteItem(item);
+    }
 }
 
 void UBGraphicsScene::setDocumentUpdated()

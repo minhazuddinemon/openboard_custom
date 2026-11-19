@@ -448,7 +448,13 @@ bool UBFFmpegVideoEncoder::init()
         }
 
         c->bit_rate = 96000;
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+        // AVCodec::sample_fmts was removed in newer FFmpeg releases; AAC's
+        // native sample format is FLTP.
+        c->sample_fmt = AV_SAMPLE_FMT_FLTP;
+#else
         c->sample_fmt  = audioCodec->sample_fmts ? audioCodec->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;// FLTP by default for AAC
+#endif
         c->sample_rate = mAudioSampleRate;
 
 #if LIBAVUTIL_VERSION_INT < AV_VERSION_INT(57, 25, 100)

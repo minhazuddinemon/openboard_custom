@@ -397,3 +397,9 @@ double UBBoardThumbnailsView::UBBoardThumbnailArranger::thumbnailWidth() const
 {
     return availableViewWidth();
 }
+
+QSizeF UBBoardThumbnailsView::UBBoardThumbnailArranger::spacing() const
+{
+    // Single column: only a small vertical gap between page cells is needed.
+    return {0.0, 8.0};
+}

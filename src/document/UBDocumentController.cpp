@@ -36,6 +36,7 @@
 #include "frameworks/UBStringUtils.h"
 
 #include "core/UBApplication.h"
+#include "core/UBHealthMonitor.h"
 #include "core/UBPersistenceManager.h"
 #include "core/UBDocumentManager.h"
 #include "core/UBApplicationController.h"
@@ -516,12 +517,15 @@ QVariant UBDocumentTreeModel::data(const QModelIndex &index, int role) const
     }
 
     if(role == Qt::BackgroundRole){
+        const bool dark = UBSettings::settings()->isDarkBackground();
+
         if (isConstant(index)) {
-            return QBrush(0xD9DFEB);
+            // "My documents" / "Trash" header rows.
+            return QBrush(dark ? QColor(0x33, 0x3A, 0x45) : QColor(0xD9, 0xDF, 0xEB));
         }
 
         if (mHighLighted.isValid() && index == mHighLighted) {
-            return QBrush(0x6682B5);
+            return QBrush(dark ? QColor(0x2d, 0x7f, 0xf9) : QColor(0x66, 0x82, 0xB5));
         }
     }
 
@@ -595,7 +599,8 @@ QVariant UBDocumentTreeModel::data(const QModelIndex &index, int role) const
             break;
         case (Qt::ForegroundRole) :
             if (isConstant(index)) {
-                return QColor(Qt::darkGray);
+                return UBSettings::settings()->isDarkBackground()
+                        ? QColor(0xE6, 0xE6, 0xE6) : QColor(Qt::darkGray);
             }
             break;
         }
@@ -1490,13 +1495,30 @@ UBDocumentTreeView::UBDocumentTreeView(QWidget *parent) : QTreeView(parent)
     setRootIsDecorated(true);
     setSelectionBehavior(SelectRows);
 
-    // The document library is a light surface. Pin its background and text
-    // colors so a dark application palette cannot leave the name column dark
-    // while making the labels dark as well.
-    setStyleSheet(
-        "QTreeView { background-color: #e6e6e6; color: #222222; }"
-        "QTreeView::item { color: #222222; }"
-        "QTreeView::item:selected { color: #FFFFFF; }");
+    // This widget-level stylesheet decides the tree body (including the empty
+    // area below the items) and the item text colour, so it must follow the
+    // active light/dark scheme and be refreshed when the theme changes.
+    updateTheme();
+    connect(UBSettings::settings(), &UBSettings::colorContextChanged,
+            this, [this]() { updateTheme(); });
+}
+
+void UBDocumentTreeView::updateTheme()
+{
+    if (UBSettings::settings()->isDarkBackground())
+    {
+        setStyleSheet(
+            "QTreeView { background-color: #2B2B2B; color: #E6E6E6; }"
+            "QTreeView::item { color: #E6E6E6; }"
+            "QTreeView::item:selected { background-color: #2d7ff9; color: #FFFFFF; }");
+    }
+    else
+    {
+        setStyleSheet(
+            "QTreeView { background-color: #e6e6e6; color: #222222; }"
+            "QTreeView::item { color: #222222; }"
+            "QTreeView::item:selected { color: #FFFFFF; }");
+    }
 }
 
 void UBDocumentTreeView::setSelectedAndExpanded(const QModelIndex &pIndex, bool pExpand, bool pEdit)
@@ -1883,9 +1905,10 @@ QWidget *UBDocumentTreeItemDelegate::createEditor(QWidget *parent, const QStyleO
             if (sourceNode)
             {
                 QLineEdit *nameEditor = new QLineEdit(parent);
+                const bool dark = UBSettings::settings()->isDarkBackground();
                 QPalette editorPalette = nameEditor->palette();
-                editorPalette.setColor(QPalette::Text, QColor("#222222"));
-                editorPalette.setColor(QPalette::Base, QColor("#FFFFFF"));
+                editorPalette.setColor(QPalette::Text, dark ? QColor("#E6E6E6") : QColor("#222222"));
+                editorPalette.setColor(QPalette::Base, dark ? QColor("#2B2B2B") : QColor("#FFFFFF"));
                 nameEditor->setPalette(editorPalette);
 
                 QList<UBDocumentTreeNode*> nodeChildren = docModel->nodeChildrenFromIndex(sourceIndex.parent());
@@ -1937,12 +1960,13 @@ void UBDocumentTreeItemDelegate::paint(QPainter * painter, const QStyleOptionVie
 {
     QStyleOptionViewItem styledOption(option);
 
-    // The document library is always displayed on a light background. Force
-    // crisp dark labels independently of the application palette, which is
-    // built for the (dark) board and would otherwise render white text here.
-    styledOption.palette.setColor(QPalette::Text, QColor("#222222"));
+    // Readable labels on the light library and on the dark scheme.
+    const bool dark = UBSettings::settings()->isDarkBackground();
+    styledOption.palette.setColor(QPalette::Text,
+                                  dark ? QColor("#E6E6E6") : QColor("#222222"));
     styledOption.palette.setColor(QPalette::HighlightedText, QColor("#FFFFFF"));
-    styledOption.palette.setColor(QPalette::Base, QColor("#e6e6e6"));
+    styledOption.palette.setColor(QPalette::Base,
+                                  dark ? QColor("#2B2B2B") : QColor("#e6e6e6"));
 
     const QBrush modelBackground =
             index.data(Qt::BackgroundRole).value<QBrush>();
@@ -1958,9 +1982,9 @@ void UBDocumentTreeItemDelegate::paint(QPainter * painter, const QStyleOptionVie
                 styledOption.palette.setColor(QPalette::Text, QColor("#FFFFFF"));
         }
         else {
-            // Explicit light backing, so the names stay readable even when
-            // the surrounding widget/palette is dark.
-            styledOption.backgroundBrush = QBrush(QColor("#e6e6e6"));
+            // Backing that matches the active scheme.
+            styledOption.backgroundBrush = QBrush(dark ? QColor("#2B2B2B")
+                                                       : QColor("#e6e6e6"));
         }
     }
 
@@ -2038,6 +2062,8 @@ void UBDocumentController::selectDocument(std::shared_ptr<UBDocumentProxy> proxy
         return;
     }
 
+    UBHealthMonitor::breadcrumb(QString("document select import=%1").arg(onImport));
+
     if (setAsCurrentDocument)
     {
         UBPersistenceManager::persistenceManager()->mDocumentTreeStructureModel->setCurrentDocument(proxy);
@@ -2053,6 +2079,8 @@ void UBDocumentController::selectDocument(std::shared_ptr<UBDocumentProxy> proxy
     }
 
     setDocument(proxy, true);
+
+    UBHealthMonitor::snapshot("document-opened");
 }
 
 void UBDocumentController::createNewDocumentGroup()
@@ -2434,7 +2462,15 @@ void UBDocumentController::setupViews()
             mDocumentUI->thumbnailWidget->setDocument(UBDocument::getDocument(proxy));
         });
 
-        mDocumentUI->thumbnailWidget->setBackgroundBrush(UBSettings::documentViewLightColor);
+        auto updateThumbnailBackground = [this]() {
+            mDocumentUI->thumbnailWidget->setBackgroundBrush(
+                    UBSettings::settings()->isDarkBackground()
+                    ? QBrush(QColor(0x2B, 0x2B, 0x2B))
+                    : QBrush(UBSettings::documentViewLightColor));
+        };
+        updateThumbnailBackground();
+        connect(UBSettings::settings(), &UBSettings::colorContextChanged,
+                this, updateThumbnailBackground);
 
         #ifdef Q_WS_MACX
             mMessageWindow = new UBMessageWindow(NULL);
@@ -3211,6 +3247,8 @@ void UBDocumentController::deleteIndexAndAssociatedData(const QModelIndex &pInde
 
 void UBDocumentController::exportDocument()
 {
+    UBHealthMonitor::breadcrumb("export requested");
+
     QAction *currentExportAction = qobject_cast<QAction *>(sender());
     QVariant actionData = currentExportAction->data();
     UBExportAdaptor* selectedExportAdaptor = UBDocumentManager::documentManager()->supportedExportAdaptors()[actionData.toInt()];
@@ -3220,6 +3258,7 @@ void UBDocumentController::exportDocument()
     selectedExportAdaptor->persist(proxy);
     emit exportDone();
 
+    UBHealthMonitor::breadcrumb("export done");
 }
 
 void UBDocumentController::exportDocumentSet()
@@ -3236,6 +3275,8 @@ void UBDocumentController::documentZoomSliderValueChanged (int value)
 
 void UBDocumentController::importFile()
 {
+    UBHealthMonitor::breadcrumb("import file");
+
     UBDocumentManager *docManager = UBDocumentManager::documentManager();
 
     QString defaultPath = UBSettings::settings()->lastImportFilePath->get().toString();

@@ -969,6 +969,16 @@ void UBSettings::setEraserWidthIndex(int index)
     setValue("Board/EraserCircleWidthIndex", index);
 }
 
+bool UBSettings::strokeEraserSelected()
+{
+    return value("Board/StrokeEraserSelected", false).toBool();
+}
+
+void UBSettings::setStrokeEraserSelected(bool stroke)
+{
+    setValue("Board/StrokeEraserSelected", stroke);
+}
+
 qreal UBSettings::eraserFineWidth()
 {
     return value("Board/EraserFineWidth", 16).toDouble();

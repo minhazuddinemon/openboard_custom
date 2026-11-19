@@ -1,5 +1,7 @@
 
 HEADERS      += src/core/UB.h \
+                src/core/UBHealthMonitor.h \
+                src/core/UBTheme.h \
                 src/core/UBShortcutManager.h \
                 src/core/UBApplication.h \
                 src/core/UBSettings.h \
@@ -19,6 +21,8 @@ HEADERS      += src/core/UB.h \
     $$PWD/UBForeignObjectsHandler.h
 
 SOURCES      += src/core/main.cpp \
+                src/core/UBHealthMonitor.cpp \
+                src/core/UBTheme.cpp \
                 src/core/UBShortcutManager.cpp \
                 src/core/UBApplication.cpp \
                 src/core/UBSettings.cpp \

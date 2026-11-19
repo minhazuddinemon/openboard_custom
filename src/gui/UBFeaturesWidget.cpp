@@ -75,15 +75,9 @@ UBFeaturesWidget::UBFeaturesWidget(QWidget *parent, const char *name)
     centralWidget = new UBFeaturesCentralWidget(this);
     controller->assignFeaturesListView(centralWidget->listView());
 
-    // The library is rendered on a light background. Force crisp dark item
-    // labels so folder/category names stay readable even when the application
-    // palette provides white text for the dark board.
-    const QString libraryListStyle =
-            "QListView { color: #222222; }"
-            "QListView::item { color: #222222; }"
-            "QListView::item:selected { color: #FFFFFF; }";
-    pathListView->setStyleSheet(libraryListStyle);
-    centralWidget->listView()->setStyleSheet(libraryListStyle);
+    updateTheme();
+    connect(UBSettings::settings(), &UBSettings::colorContextChanged,
+            this, [this]() { updateTheme(); });
     centralWidget->setSliderPosition(UBSettings::settings()->featureSliderPosition->get().toInt());
 
     //Bottom actionbar for DnD, quick search etc
@@ -407,6 +401,23 @@ void UBFeaturesWidget::removeElementsFromFavorite()
     }
 
     controller->refreshModels();
+}
+
+void UBFeaturesWidget::updateTheme()
+{
+    // Keep item labels readable on the light and dark library panel.
+    const QString listStyle = UBSettings::settings()->isDarkBackground()
+            ? QString("QListView { color: #E6E6E6; background: #2B2B2B; }"
+                      "QListView::item { color: #E6E6E6; }"
+                      "QListView::item:selected { color: #FFFFFF; background: #2d7ff9; }")
+            : QString("QListView { color: #222222; }"
+                      "QListView::item { color: #222222; }"
+                      "QListView::item:selected { color: #FFFFFF; }");
+
+    if (pathListView)
+        pathListView->setStyleSheet(listStyle);
+    if (centralWidget && centralWidget->listView())
+        centralWidget->listView()->setStyleSheet(listStyle);
 }
 
 void UBFeaturesWidget::switchToListView()

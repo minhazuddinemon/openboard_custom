@@ -50,6 +50,14 @@ class UBColorPicker : public QFrame
         void setColors(const QList<QColor>& pColors)
         {
             mColors = pColors;
+
+            // Keep the selection valid when the list changes (it can be
+            // empty, shorter or longer than before).
+            if (mColors.isEmpty())
+                mSelectedColorIndex = 0;
+            else if (mSelectedColorIndex < 0 || mSelectedColorIndex >= mColors.size())
+                mSelectedColorIndex = 0;
+
             repaint();
         }
 
@@ -60,7 +68,13 @@ class UBColorPicker : public QFrame
 
         void setSelectedColorIndex(int pSelectedColorIndex)
         {
-            mSelectedColorIndex = pSelectedColorIndex;
+            // QList::indexOf() returns -1 when the color is not in the list;
+            // never store an out-of-range index.
+            if (mColors.isEmpty())
+                mSelectedColorIndex = 0;
+            else
+                mSelectedColorIndex = qBound(0, pSelectedColorIndex, mColors.size() - 1);
+
             repaint();
         }
 

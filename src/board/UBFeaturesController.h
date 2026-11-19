@@ -266,6 +266,9 @@ private:
 private:
 
     static QImage createThumbnail(const QString &path);
+    // Draw a figure with transparency on a contrasting backdrop so light
+    // figures are visible in the library panel.
+    static QImage withVisibleBackdrop(const QImage &source);
     //void addImageToCurrentPage( const QString &path );
     void loadFavoriteList();
     void saveFavoriteList();

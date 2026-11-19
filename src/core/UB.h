@@ -55,6 +55,31 @@ constexpr int UBShapeStrokeStyleCount = 3;
 // Diameter, in device-independent pixels, of the free-triangle apex handle.
 constexpr qreal ShapeHandleDiameter = 14.0;
 
+// Hold-to-straighten for the Pen and Marker tools: after holding still for
+// this long, the stroke becomes a straight line. All distances are in screen
+// pixels and are divided by the scale factor and zoom; the tolerance must
+// exceed pen jitter.
+constexpr int StraightenHoldTimeoutMs = 450;
+constexpr qreal StraightenHoldTolerance = 6.0;
+constexpr qreal StraightenMinEndDistance = 40.0;
+constexpr qreal StraightenMinPathLength = 60.0;
+
+// The straightened line uses the tool's full configured width. With a
+// pressure-sensitive pen the freehand stroke is thinner, so scale the
+// straightened line per tool.
+constexpr qreal StraightenPenWidthFactor = 0.6;
+constexpr qreal StraightenMarkerWidthFactor = 1.0;
+
+// With the magnet off, a line within AxisAlignToleranceDegrees of an axis
+// snaps to exactly horizontal or vertical. Hysteresis keeps it snapped
+// until the angle exceeds AxisAlignReleaseDegrees, so pen jitter near the
+// boundary does not flicker. Lines shorter than AxisAlignMinLength screen
+// pixels are never aligned (a tiny movement changes their angle a lot).
+// Applies to line/arrow/double-arrow and the hold-to-straighten line.
+constexpr qreal AxisAlignToleranceDegrees = 1.5;
+constexpr qreal AxisAlignReleaseDegrees = 2.5;
+constexpr qreal AxisAlignMinLength = 40.0;
+
 #if defined(Q_OS_LINUX) || (defined(Q_OS_OSX) && (QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)))
 #define UB_REQUIRES_MASK_UPDATE 1
 #endif

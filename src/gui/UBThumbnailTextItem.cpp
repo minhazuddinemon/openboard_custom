@@ -26,6 +26,8 @@
 #include <QTextDocument>
 #include <QTextOption>
 
+#include "core/UBSettings.h"
+
 UBThumbnailTextItem::UBThumbnailTextItem()
     : QGraphicsTextItem()
 {
@@ -79,6 +81,19 @@ void UBThumbnailTextItem::setText(const QString& text)
 {
     mUnelidedText = text;
     computeText();
+}
+
+void UBThumbnailTextItem::paint(QPainter* painter,
+                                const QStyleOptionGraphicsItem* option,
+                                QWidget* widget)
+{
+    // "Page N" must be readable on both light and dark panels.
+    const QColor color = UBSettings::settings()->isDarkBackground()
+            ? QColor(0xE6, 0xE6, 0xE6) : QColor(0x22, 0x22, 0x22);
+    if (defaultTextColor() != color)
+        setDefaultTextColor(color);
+
+    QGraphicsTextItem::paint(painter, option, widget);
 }
 
 void UBThumbnailTextItem::computeText()

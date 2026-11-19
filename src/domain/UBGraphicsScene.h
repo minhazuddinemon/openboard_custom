@@ -217,7 +217,13 @@ class UBGraphicsScene: public UBCoreGraphicsScene, public UBItem, public std::en
         // inputDeviceRelease() commit path.
         void commitShapeEditing();
 
+        // Stops the Pen/Marker hold-to-straighten timer (e.g. on page change).
+        void stopStraightenHold();
+
         bool isEmpty() const;
+
+        bool inputDeviceIsPressed() const { return mInputDeviceIsPressed; }
+        int itemCount() const { return mItemCount; }
 
         void setDocument(std::shared_ptr<UBDocumentProxy> pDocument);
 
@@ -429,6 +435,7 @@ signals:
         void removeShapeHandle();
         void updateShapeAngleLabel(const QPointF& scenePos, qreal angle);
         void removeShapeAngleLabel();
+        QPointF alignLineEndToAxis(const QPointF& start, const QPointF& end);
         void updateShapeStrokePreview(const QVector<QPointF>& points, qreal width, int style);
         void removeShapeStrokePreview();
         void finishShapeStrokePreview();
@@ -474,6 +481,12 @@ signals:
         bool hasTextItemWithFocus(UBGraphicsGroupContainerItem* item);
         void simplifyCurrentStroke();
 
+        // Hold-to-straighten for Pen and Marker strokes.
+        void startStraightenHold(const QPointF& startPoint);
+        void straightenHoldTimeout();
+        void updateStraightenedLine(const QPointF& endPoint);
+        void discardStrokeForStraightening();
+
         // Returns the z-value for a freshly created highlighter (Marker)
         // stroke: just below the lowest pen stroke, above any non-stroke item
         // that sits below that pen stroke, and above older highlighter
@@ -494,7 +507,7 @@ signals:
         void updateLaserStroke(const QPointF& scenePos);
         void finishLaserStroke();
         void updateLaserStrokes();
-        void scheduleLaserCleanup();
+        void clearLaserStrokes();
 
         QGraphicsEllipseItem* mEraser;
         QGraphicsEllipseItem* mPointer; // "laser" pointer
@@ -507,8 +520,6 @@ signals:
         QTimer* mLaserTimer;
         QList<QPointer<UBGraphicsLaserStroke>> mLaserStrokes;
         QPointer<UBGraphicsLaserStroke> mCurrentLaserStroke;
-        qint64 mLaserIdleMs;
-        bool mLaserCleanupScheduled;
 
         QSet<QGraphicsItem*> mAddedItems;
         QSet<QGraphicsItem*> mRemovedItems;
@@ -542,6 +553,8 @@ signals:
         bool mShapeEditing;
         bool mShapeHandleDragging;
         bool mShapeForceCommit;
+        // 0 = free, 1 = snapped horizontal, 2 = snapped vertical.
+        int mAxisAlignAxis;
         QRectF mShapeEditingDragRect;
         int mShapeEditingKind;
         QPointF mShapeHandlePos;
@@ -571,6 +584,16 @@ signals:
         UBZLayerController *mZLayerController;
         UBGraphicsPolygonItem* mpLastPolygon;
         UBGraphicsPolygonItem* mTempPolygon;
+
+        QTimer* mStraightenTimer;
+        bool mStraightenPending;
+        bool mStraightenActive;
+        QPointF mStraightenStartPoint;
+        QPointF mStraightenHoldAnchor;
+        QPointF mStraightenEndPoint;
+        qreal mStraightenWidth;
+        qreal mStraightenPathLength;
+        UBGraphicsPolygonItem* mStraightenPolygon;
 
         bool mDrawWithCompass;
         UBGraphicsPolygonItem *mCurrentPolygon;

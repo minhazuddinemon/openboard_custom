@@ -78,6 +78,7 @@ void UBDocumentThumbnailsView::setDocument(std::shared_ptr<UBDocument> document)
         auto thumbnailScene = document->thumbnailScene();
 
         setScene(thumbnailScene);
+        thumbnailScene->setBackgroundBrush(mBackgroundBrush);
         thumbnailScene->arrangeThumbnails();
     }
     else
@@ -136,6 +137,7 @@ void UBDocumentThumbnailsView::clearSelection()
 
 void UBDocumentThumbnailsView::setBackgroundBrush(const QBrush& brush)
 {
+    mBackgroundBrush = brush;
     if (mDocument)
     {
         mDocument->thumbnailScene()->setBackgroundBrush(brush);

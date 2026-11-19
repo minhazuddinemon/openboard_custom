@@ -30,6 +30,8 @@
 #include <QGraphicsItem>
 #include <QPointF>
 #include <QtGui>
+#include <QSvgRenderer>
+#include <QPainter>
 
 #include "core/UBApplication.h"
 #include "board/UBBoardController.h"
@@ -45,9 +47,51 @@
 #include "domain/UBGraphicsScene.h"
 #include "domain/UBGraphicsSvgItem.h"
 #include "domain/UBGraphicsPixmapItem.h"
+#include "domain/UBSvgMarkerPreprocessor.h"
 #include "domain/UBGraphicsWidgetItem.h"
 
 #include "gui/UBFeaturesWidget.h"
+
+namespace
+{
+// Render an SVG through QSvgRenderer after expanding markers, so
+// thumbnails keep the arrowheads that Qt otherwise drops.
+QImage renderSvgThumbnail(const QString& path, int maxWidth)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return QImage();
+    const QByteArray data = file.readAll();
+    file.close();
+
+    QSvgRenderer renderer(UBSvgMarkerPreprocessor::process(data));
+    if (!renderer.isValid())
+        return QImage();
+
+    QSize size = renderer.defaultSize();
+    if (size.isEmpty())
+    {
+        const QRectF view = renderer.viewBoxF();
+        size = QSize(qRound(view.width()), qRound(view.height()));
+    }
+    if (size.isEmpty())
+        return QImage();
+
+    if (maxWidth > 0 && size.width() > maxWidth)
+    {
+        const qreal ratio = static_cast<qreal>(size.height()) / size.width();
+        size.setWidth(maxWidth);
+        size.setHeight(qMax(1, qRound(maxWidth * ratio)));
+    }
+
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    renderer.render(&painter);
+    painter.end();
+    return image;
+}
+} // namespace
 
 const QString UBFeaturesController::virtualRootName = "root";
 const QString UBFeaturesController::rootPath  = "/" + virtualRootName;
@@ -817,6 +861,48 @@ UBFeatureElementType UBFeaturesController::fileTypeFromUrl(const QString &path)
     return fileType;
 }
 
+QImage UBFeaturesController::withVisibleBackdrop(const QImage &source)
+{
+    // Only figures with transparency need a backdrop; opaque images already
+    // show their own content.
+    if (source.isNull() || !source.hasAlphaChannel())
+        return source;
+
+    const QImage image = source.convertToFormat(QImage::Format_ARGB32);
+
+    // Average brightness of the visible (non-transparent) pixels, sampling a
+    // grid so this stays cheap even for large images.
+    qint64 sum = 0;
+    qint64 count = 0;
+    const int stepX = qMax(1, image.width() / 64);
+    const int stepY = qMax(1, image.height() / 64);
+    for (int y = 0; y < image.height(); y += stepY) {
+        const QRgb *line = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+        for (int x = 0; x < image.width(); x += stepX) {
+            const QRgb pixel = line[x];
+            if (qAlpha(pixel) < 16)
+                continue;
+            sum += qGray(pixel);
+            ++count;
+        }
+    }
+
+    if (count == 0)
+        return source; // fully transparent: nothing to make visible
+
+    const int average = static_cast<int>(sum / count);
+    // A light figure gets a dark backdrop and a dark figure a light one.
+    const QColor backdrop = (average >= 128) ? QColor(0x1e, 0x1e, 0x1e)
+                                             : QColor(0xf0, 0xf0, 0xf0);
+
+    QImage result(image.size(), QImage::Format_ARGB32);
+    result.fill(backdrop);
+    QPainter painter(&result);
+    painter.drawImage(0, 0, image);
+    painter.end();
+    return result;
+}
+
 QImage UBFeaturesController::getIcon(const QString &path, UBFeatureElementType pFType = FEATURE_INVALID)
 {
     if (pFType == FEATURE_FOLDER) {
@@ -834,6 +920,13 @@ QImage UBFeaturesController::getIcon(const QString &path, UBFeatureElementType p
     } else if (pFType == FEATURE_VIDEO) {
         return QImage(":images/libpalette/movieIcon.svg");
     } else if (pFType == FEATURE_IMAGE) {
+        if (path.endsWith(".svg", Qt::CaseInsensitive))
+        {
+            const QImage svgPix = renderSvgThumbnail(path, UBSettings::maxThumbnailWidth);
+            if (!svgPix.isNull())
+                return withVisibleBackdrop(svgPix);
+        }
+
         QFile file(path);
         QImage pix;
 
@@ -848,6 +941,7 @@ QImage UBFeaturesController::getIcon(const QString &path, UBFeatureElementType p
             pix = QImage(":images/libpalette/notFound.png");
         } else {
             pix = pix.scaledToWidth(qMin(UBSettings::maxThumbnailWidth, pix.width()));
+            pix = withVisibleBackdrop(pix);
         }
         return pix;
     }
@@ -884,9 +978,16 @@ QImage UBFeaturesController::createThumbnail(const QString &path)
     } else if ( mimetype.contains("video")) {
         thumbnailPath = ":images/libpalette/movieIcon.svg";
     } else {
+        if (path.endsWith(".svg", Qt::CaseInsensitive)) {
+            const QImage svgPix = renderSvgThumbnail(path, UBSettings::maxThumbnailWidth);
+            if (!svgPix.isNull())
+                return withVisibleBackdrop(svgPix);
+        }
+
         QImage pix(path);
         if (!pix.isNull()) {
             pix = pix.scaledToWidth(qMin(UBSettings::maxThumbnailWidth, pix.width()), Qt::SmoothTransformation);
+            pix = withVisibleBackdrop(pix);
             return pix;
 
         } else {

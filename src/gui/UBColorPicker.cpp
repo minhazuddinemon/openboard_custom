@@ -61,7 +61,7 @@ void UBColorPicker::paintEvent ( QPaintEvent * event )
 
     QPainter painter(this);
 
-    if (mSelectedColorIndex < mColors.size())
+    if (mSelectedColorIndex >= 0 && mSelectedColorIndex < mColors.size())
     {
         painter.setRenderHint(QPainter::Antialiasing);
 
@@ -76,9 +76,12 @@ void UBColorPicker::mousePressEvent ( QMouseEvent * event )
 {
     if (event->buttons() & Qt::LeftButton)
     {
+        if (mColors.isEmpty())
+            return;
+
         mSelectedColorIndex++;
 
-        if (mSelectedColorIndex >= mColors.size())
+        if (mSelectedColorIndex < 0 || mSelectedColorIndex >= mColors.size())
             mSelectedColorIndex = 0;
 
         repaint();

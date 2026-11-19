@@ -35,6 +35,8 @@
 #include "UBGraphicsItemDelegate.h"
 #include "UBGraphicsPixmapItem.h"
 
+#include "UBSvgMarkerPreprocessor.h"
+
 #include "core/UBApplication.h"
 #include "core/UBPersistenceManager.h"
 
@@ -45,7 +47,7 @@
 #include "core/memcheck.h"
 
 UBGraphicsSvgItem::UBGraphicsSvgItem(const QString& pFilePath, QGraphicsItem* parent)
-    : QGraphicsSvgItem(pFilePath, parent)
+    : QGraphicsSvgItem(parent)
 {
     init();
 
@@ -56,6 +58,13 @@ UBGraphicsSvgItem::UBGraphicsSvgItem(const QString& pFilePath, QGraphicsItem* pa
         mFileData = f.readAll();
         f.close();
     }
+
+    // Keep mFileData as the original file content (never rewrite the file
+    // on disk); only the renderer sees the marker-expanded version.
+    QSvgRenderer* renderer = mFileData.isEmpty()
+            ? new QSvgRenderer(pFilePath, this)
+            : new QSvgRenderer(UBSvgMarkerPreprocessor::process(mFileData), this);
+    setSharedRenderer(renderer);
 }
 
 UBGraphicsSvgItem::UBGraphicsSvgItem(const QByteArray& pFileData, QGraphicsItem* parent)
@@ -63,7 +72,8 @@ UBGraphicsSvgItem::UBGraphicsSvgItem(const QByteArray& pFileData, QGraphicsItem*
 {
     init();
 
-    QSvgRenderer* renderer = new QSvgRenderer(pFileData, this);
+    QSvgRenderer* renderer =
+            new QSvgRenderer(UBSvgMarkerPreprocessor::process(pFileData), this);
 
     setSharedRenderer(renderer);
     mFileData = pFileData;

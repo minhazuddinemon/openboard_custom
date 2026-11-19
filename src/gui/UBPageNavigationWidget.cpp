@@ -29,6 +29,7 @@
 
 #include "UBPageNavigationWidget.h"
 #include "core/UBApplication.h"
+#include "core/UBSettings.h"
 
 #include "board/UBBoardController.h"
 #include "globals/UBGlobals.h"
@@ -71,13 +72,13 @@ UBPageNavigationWidget::UBPageNavigationWidget(QWidget *parent, const char *name
     mHLayout->addWidget(mPageNbr);
     mHLayout->addWidget(mClock);
 
-    // Configure the page number indicator
-    mPageNbr->setStyleSheet(QString("QLabel { color: white; background-color: transparent; border: none; font-family: Arial; font-weight: bold; font-size: 20px }"));
+    // Configure the page number indicator and clock (theme-aware colours)
+    updateLabelStyle();
     setPageNumber(0, 0);
     mPageNbr->setAlignment(Qt::AlignHCenter);
 
-    // Configure the clock
-    mClock->setStyleSheet(QString("QLabel {color: white; background-color: transparent; text-align: center; font-family: Arial; font-weight: bold; font-size: 20px}"));
+    connect(UBSettings::settings(), &UBSettings::colorContextChanged,
+            this, [this]() { updateLabelStyle(); });
     mTimeFormat = QLocale::system().timeFormat(QLocale::ShortFormat);
     mClock->setAlignment(Qt::AlignHCenter);
 
@@ -135,6 +136,16 @@ void UBPageNavigationWidget::timerEvent(QTimerEvent *event)
 /**
  * \brief Update the current time
  */
+void UBPageNavigationWidget::updateLabelStyle()
+{
+    const QString color = UBSettings::settings()->isDarkBackground()
+            ? "#E6E6E6" : "#3F3F3F";
+    if (mPageNbr)
+        mPageNbr->setStyleSheet(QString("QLabel { color: %1; background-color: transparent; border: none; font-family: Arial; font-weight: bold; font-size: 20px }").arg(color));
+    if (mClock)
+        mClock->setStyleSheet(QString("QLabel { color: %1; background-color: transparent; text-align: center; font-family: Arial; font-weight: bold; font-size: 20px }").arg(color));
+}
+
 void UBPageNavigationWidget::updateTime()
 {
     if (mClock)

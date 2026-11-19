@@ -35,6 +35,7 @@
 #include <QPdfWriter>
 
 #include "core/UBApplication.h"
+#include "core/UBHealthMonitor.h"
 #include "core/UBDisplayManager.h"
 #include "core/UBSettings.h"
 #include "core/UBSetting.h"
@@ -83,6 +84,9 @@ bool UBExportPDF::persistsDocument(std::shared_ptr<UBDocumentProxy> pDocumentPro
     QPdfWriter pdfWriter(filename);
 
     qDebug() << "exporting document to PDF" << filename;
+
+    UBHealthMonitor::breadcrumb("pdf export start (simple)");
+    UBHealthMonitor::snapshot("pdf-export-start");
 
     pdfWriter.setResolution(UBSettings::settings()->pdfResolution->get().toInt());
     pdfWriter.setPageMargins(QMarginsF());
@@ -182,6 +186,9 @@ bool UBExportPDF::persistsDocument(std::shared_ptr<UBDocumentProxy> pDocumentPro
 
     if(!painterNeedsBegin)
         pdfPainter.end();
+
+    UBHealthMonitor::breadcrumb("pdf export end (simple)");
+    UBHealthMonitor::snapshot("pdf-export-end");
 
     return true;
 }

@@ -61,6 +61,7 @@ public:
     void adjustThumbnail();
 
     static double heightForWidth(double width);
+    static double heightForWidth(double width, double aspectRatio);
 
 protected:
     virtual QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
@@ -71,6 +72,9 @@ protected:
 
 private:
     static int labelSpacing();
+    // Rectangle of a hover UI button in this item's coordinates. Slot 0 is
+    // the right-most button (top-right corner of the page pixmap).
+    QRectF buttonRect(int slot) const;
 
 private:
     QGraphicsPixmapItem* mPixmapItem{nullptr};

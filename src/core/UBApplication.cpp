@@ -39,6 +39,7 @@
 #include "frameworks/UBStringUtils.h"
 
 #include "UBSettings.h"
+#include "UBTheme.h"
 #include "UBSetting.h"
 #include "UBPersistenceManager.h"
 #include "UBDocumentManager.h"
@@ -137,6 +138,10 @@ UBApplication::UBApplication(const QString &id, int &argc, char **argv) : Single
 
     UBSettings *settings = UBSettings::settings();
 
+    // Re-apply the (light or dark) theme whenever the board colour context
+    // changes, and once at startup below.
+    connect(settings, &UBSettings::colorContextChanged, this, []() { UBTheme::apply(); });
+
     connect(settings->appToolBarPositionedAtTop, SIGNAL(changed(QVariant)), this, SLOT(toolBarPositionChanged(QVariant)));
     connect(settings->appToolBarDisplayText, SIGNAL(changed(QVariant)), this, SLOT(toolBarDisplayTextChanged(QVariant)));
     connect(this, &SingleApplication::receivedMessage, this, &UBApplication::handleOpenMessage);
@@ -148,9 +153,10 @@ UBApplication::UBApplication(const QString &id, int &argc, char **argv) : Single
 
     setStyle("fusion");
 
-    QString css = UBFileSystemUtils::readTextFile(UBPlatformUtils::applicationEtcDirectory() + "/"+ qApp->applicationName()+".css");
-    if (css.length() > 0)
-        setStyleSheet(css);
+    // Applies the existing light look, or the dark scheme when the board
+    // uses a dark background. Re-applied on theme changes (see above).
+    UBTheme::initialize();
+    UBTheme::apply();
 
     QApplication::setStartDragDistance(8); // default is 4, and is a bit small for tablets
 

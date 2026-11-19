@@ -42,9 +42,11 @@
 #include "board/UBFeaturesController.h"
 
 #include "frameworks/UBFileSystemUtils.h"
+#include "frameworks/UBStringUtils.h"
 #include "frameworks/UBPlatformUtils.h"
 
 #include "core/UBApplication.h"
+#include "core/UBHealthMonitor.h"
 #include "core/UBApplicationController.h"
 #include "core/UBDisplayManager.h"
 #include "core/UBDocumentManager.h"
@@ -410,6 +412,63 @@ UBBoardController::UBBoardController(UBMainWindow* mainWindow)
 }
 
 
+namespace
+{
+void collectDocumentProxies(const UBDocumentTreeModel* model,
+                            const QModelIndex& parent,
+                            QList<std::shared_ptr<UBDocumentProxy>>& documents)
+{
+    const int rows = model->rowCount(parent);
+    for (int i = 0; i < rows; ++i)
+    {
+        const QModelIndex index = model->index(i, 0, parent);
+        if (!index.isValid())
+            continue;
+
+        if (model->isDocument(index))
+        {
+            if (!model->inTrash(index))
+                documents.append(model->proxyData(index));
+        }
+        else if (model->hasChildren(index))
+        {
+            collectDocumentProxies(model, index, documents);
+        }
+    }
+}
+} // namespace
+
+std::shared_ptr<UBDocumentProxy> UBBoardController::mostRecentlyUsedDocument() const
+{
+    UBDocumentTreeModel* model =
+            UBPersistenceManager::persistenceManager()->mDocumentTreeStructureModel;
+    if (!model)
+        return std::shared_ptr<UBDocumentProxy>();
+
+    QList<std::shared_ptr<UBDocumentProxy>> documents;
+    collectDocumentProxies(model, QModelIndex(), documents);
+
+    std::shared_ptr<UBDocumentProxy> mostRecent;
+    QDateTime mostRecentDate;
+    for (const std::shared_ptr<UBDocumentProxy>& document : documents)
+    {
+        if (!document)
+            continue;
+
+        QDateTime date = UBStringUtils::fromUtcIsoDate(
+                document->metaData(UBSettings::documentUpdatedAt).toString());
+        if (!date.isValid())
+            date = QFileInfo(document->persistencePath()).lastModified();
+
+        if (!mostRecent || date > mostRecentDate)
+        {
+            mostRecent = document;
+            mostRecentDate = date;
+        }
+    }
+    return mostRecent;
+}
+
 void UBBoardController::init()
 {
     setupViews();
@@ -438,7 +497,11 @@ void UBBoardController::init()
     connect(persistenceManager, &UBPersistenceManager::documentSceneMoved, this, &UBBoardController::documentSceneMoved);
     connect(persistenceManager, &UBPersistenceManager::documentSceneDeleted, this, &UBBoardController::documentSceneDeleted);
 
-    std::shared_ptr<UBDocumentProxy> doc = UBPersistenceManager::persistenceManager()->createNewDocument();
+    // Open the most recently used document on startup. Only create a new
+    // one when no document exists yet.
+    std::shared_ptr<UBDocumentProxy> doc = mostRecentlyUsedDocument();
+    if (!doc)
+        doc = UBPersistenceManager::persistenceManager()->createNewDocument();
 
     if (doc)
     {
@@ -666,7 +729,7 @@ void UBBoardController::setupToolbar()
     colorActions << recentCustomColor1 << recentCustomColor2 << customColorPicker;
 
     UBToolbarButtonGroup *colorChoice =
-            new UBToolbarButtonGroup(mMainWindow->boardToolBar, colorActions);
+            new UBToolbarButtonGroup(mMainWindow->boardToolBar, colorActions, "color");
     colorChoice->setLabel(tr("Color"));
     colorChoice->setIcon(createCustomColorPickerIcon(), colorActions.size() - 1);
 
@@ -769,7 +832,9 @@ void UBBoardController::setupToolbar()
     connect(UBDrawingController::drawingController(), SIGNAL(stylusToolChanged(int, int))
             , this, SLOT(eraserToolChanged(int)));
 
-    const int initialEraserWidthIndex = qBound(0, settings->eraserWidthIndex(), int(UBWidth::Strong));
+    const int initialEraserWidthIndex = settings->strokeEraserSelected()
+            ? mStrokeEraserActionIndex
+            : qBound(0, settings->eraserWidthIndex(), int(UBWidth::Strong));
 
     eraserWidthChoice->displayText(QVariant(false)); // icon-only: keep the toolbar compact
     eraserWidthChoice->setCurrentIndex(initialEraserWidthIndex);
@@ -948,6 +1013,8 @@ void UBBoardController::redoWithShapeCommit()
 
 void UBBoardController::saveData(SaveFlags fls)
 {
+    UBHealthMonitor::breadcrumb("save requested");
+
     bool verbose = fls | sf_showProgress;
     if (verbose) {
         UBApplication::showMessage(tr("Saving document..."));
@@ -958,6 +1025,8 @@ void UBBoardController::saveData(SaveFlags fls)
     if (verbose) {
         UBApplication::showMessage(tr("Document has just been saved..."));
     }
+
+    UBHealthMonitor::snapshot("document-saved");
 }
 
 void UBBoardController::documentSceneDuplicated(std::shared_ptr<UBDocumentProxy> proxy, int index)
@@ -2204,9 +2273,13 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
     UBApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
     persistViewPositionOnCurrentScene();
 
-    // Finalize an in-progress free triangle before leaving the page.
+    // Finalize an in-progress free triangle and stop the Pen/Marker
+    // hold-to-straighten timer before leaving the page.
     if (mActiveScene)
+    {
         mActiveScene->commitShapeEditing();
+        mActiveScene->stopStraightenHold();
+    }
 
     bool documentChange = selectedDocument() != pDocumentProxy;
 
@@ -3480,14 +3553,62 @@ void UBBoardController::copy()
 void UBBoardController::paste()
 {
     QClipboard *clipboard = QApplication::clipboard();
-    qreal xPosition = ((qreal)QRandomGenerator::global()->bounded(RAND_MAX)/(qreal)RAND_MAX) * 400;
-    qreal yPosition = ((qreal)QRandomGenerator::global()->bounded(RAND_MAX)/(qreal)RAND_MAX) * 200;
-    QPointF randomPos(xPosition -200 , yPosition - 100);
+    const QMimeData *mimeData = clipboard->mimeData();
+
     QRect rect = mControlView->rect();
     QPoint center(rect.x() + rect.width() / 2, rect.y() + rect.height() / 2);
-    QPointF viewRelativeCenter = mControlView->mapToScene(center);
+    const QPointF viewRelativeCenter = mControlView->mapToScene(center);
 
-    processMimeData(clipboard->mimeData(), viewRelativeCenter + randomPos);
+    qreal imageScale = 1.0;
+    QPointF pastePos;
+
+    if (mimeData->hasImage())
+    {
+        // Fit a pasted image to the visible page so it looks the same size on
+        // blank and imported-PDF pages: keep the aspect ratio, never upscale
+        // beyond the natural size, and never exceed 40% of the visible width
+        // or height. The image is centred in the visible area.
+        QImage image;
+        const QVariant imageData = mimeData->imageData();
+        if (imageData.canConvert<QImage>())
+            image = qvariant_cast<QImage>(imageData);
+        if (image.isNull())
+        {
+            const QStringList formats = mimeData->formats();
+            for (const QString &format : formats)
+            {
+                if (UBFileSystemUtils::mimeTypeFromString(format) == UBMimeType::RasterImage)
+                {
+                    image = QImage::fromData(mimeData->data(format));
+                    break;
+                }
+            }
+        }
+
+        const QRectF visible =
+                mControlView->mapToScene(mControlView->rect()).boundingRect();
+        if (!image.isNull() && image.width() > 0 && image.height() > 0
+                && visible.width() > 0.0 && visible.height() > 0.0)
+        {
+            const qreal maxWidth = visible.width() * 0.4;
+            const qreal maxHeight = visible.height() * 0.4;
+            imageScale = qMin<qreal>(1.0, qMin(maxWidth / image.width(),
+                                              maxHeight / image.height()));
+            if (imageScale <= 0.0)
+                imageScale = 1.0;
+        }
+
+        pastePos = viewRelativeCenter;
+    }
+    else
+    {
+        qreal xPosition = ((qreal)QRandomGenerator::global()->bounded(RAND_MAX)/(qreal)RAND_MAX) * 400;
+        qreal yPosition = ((qreal)QRandomGenerator::global()->bounded(RAND_MAX)/(qreal)RAND_MAX) * 200;
+        QPointF randomPos(xPosition -200 , yPosition - 100);
+        pastePos = viewRelativeCenter + randomPos;
+    }
+
+    processMimeData(mimeData, pastePos, imageScale);
 
     QDateTime now = QDateTime::currentDateTime();
     selectedDocument()->setMetaData(UBSettings::documentUpdatedAt, UBStringUtils::toUtcIsoDateTime(now));
@@ -3501,7 +3622,7 @@ bool zLevelLessThan( UBItem* s1, UBItem* s2)
     return s1Zvalue < s2Zvalue;
 }
 
-void UBBoardController::processMimeData(const QMimeData* pMimeData, const QPointF& pPos)
+void UBBoardController::processMimeData(const QMimeData* pMimeData, const QPointF& pPos, qreal pImageScale)
 {
     if (pMimeData->hasFormat(UBApplication::mimeTypeUniboardPageItem))
     {
@@ -3600,7 +3721,7 @@ void UBBoardController::processMimeData(const QMimeData* pMimeData, const QPoint
             // validate that the image is really an image, webkit does not fill properly the image mime data
             if (!buffer.data().isEmpty())
             {
-                mActiveScene->addImage(buffer.data(), nullptr, pPos, 1.);
+                mActiveScene->addImage(buffer.data(), nullptr, pPos, pImageScale);
                 return;
             }
         }

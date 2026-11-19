@@ -31,6 +31,7 @@
 
 #include "UBSettings.h"
 #include "UBApplication.h"
+#include "core/UBHealthMonitor.h"
 
 #include "gui/UBCircleFrame.h"
 
@@ -141,6 +142,8 @@ void UBPreferencesController::adjustScreensPreferences()
 
 void UBPreferencesController::show()
 {
+    UBHealthMonitor::breadcrumb("preferences opened");
+
     init();
 
     mPreferencesWindow->exec();
@@ -711,11 +714,14 @@ UBBrushPropertiesFrame::UBBrushPropertiesFrame(QFrame* owner, const QList<QColor
     darkBackgroundFrame->setPalette(darkBackgroundPalette);
     darkBackgroundLabel->setPalette(darkBackgroundPalette);
 
-    QList<QColor> firstLightBackgroundColor;
-    firstLightBackgroundColor.append(lightBackgroundColors[0]);
+    if (!lightBackgroundColors.isEmpty())
+    {
+        QList<QColor> firstLightBackgroundColor;
+        firstLightBackgroundColor.append(lightBackgroundColors[0]);
 
-    lightBackgroundColorPicker0->setColors(firstLightBackgroundColor);
-    lightBackgroundColorPicker0->setSelectedColorIndex(0);
+        lightBackgroundColorPicker0->setColors(firstLightBackgroundColor);
+        lightBackgroundColorPicker0->setSelectedColorIndex(0);
+    }
     lightBackgroundColorPickers.append(lightBackgroundColorPicker0);
 
     for (int i = 1 ; i < UBSettings::settings()->colorPaletteSize ; i++)
@@ -730,7 +736,9 @@ UBBrushPropertiesFrame::UBBrushPropertiesFrame(QFrame* owner, const QList<QColor
 
         picker->setColors(lightBackgroundColors);
 
-        picker->setSelectedColorIndex(lightBackgroundColors.indexOf(lightBackgroundSelectedColors.at(i)));
+        const QColor selectedLightColor = (i < lightBackgroundSelectedColors.size())
+                ? lightBackgroundSelectedColors.at(i) : QColor();
+        picker->setSelectedColorIndex(lightBackgroundColors.indexOf(selectedLightColor));
 
         lightBackgroundColorPickers.append(picker);
 
@@ -738,11 +746,14 @@ UBBrushPropertiesFrame::UBBrushPropertiesFrame(QFrame* owner, const QList<QColor
 
     }
 
-    QList<QColor> firstDarkBackgroundColor;
-    firstDarkBackgroundColor.append(darkBackgroundColors[0]);
+    if (!darkBackgroundColors.isEmpty())
+    {
+        QList<QColor> firstDarkBackgroundColor;
+        firstDarkBackgroundColor.append(darkBackgroundColors[0]);
 
-    darkBackgroundColorPicker0->setColors(firstDarkBackgroundColor);
-    darkBackgroundColorPicker0->setSelectedColorIndex(0);
+        darkBackgroundColorPicker0->setColors(firstDarkBackgroundColor);
+        darkBackgroundColorPicker0->setSelectedColorIndex(0);
+    }
     darkBackgroundColorPickers.append(darkBackgroundColorPicker0);
 
     for (int i = 1 ; i < UBSettings::settings()->colorPaletteSize ; i++)
@@ -756,7 +767,10 @@ UBBrushPropertiesFrame::UBBrushPropertiesFrame(QFrame* owner, const QList<QColor
         darkBackgroundLayout->addWidget(picker);
 
         picker->setColors(darkBackgroundColors);
-        picker->setSelectedColorIndex(darkBackgroundColors.indexOf(darkBackgroundSelectedColors.at(i)));
+
+        const QColor selectedDarkColor = (i < darkBackgroundSelectedColors.size())
+                ? darkBackgroundSelectedColors.at(i) : QColor();
+        picker->setSelectedColorIndex(darkBackgroundColors.indexOf(selectedDarkColor));
 
         darkBackgroundColorPickers.append(picker);
 

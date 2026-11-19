@@ -111,6 +111,7 @@ private:
 
         virtual int columnCount() const override;
         virtual double thumbnailWidth() const override;
+        virtual QSizeF spacing() const override;
     };
 };
 

@@ -53,6 +53,9 @@ class UBToolbarButtonGroup : public QWidget
     protected:
         void paintEvent(QPaintEvent *);
 
+        QIcon swatchIcon(const QColor &color, bool selected) const;
+        void refreshColorIcons();
+
     private:
         QToolButton         *mToolButton; // The first button in the toolbar
         QString              mLabel;
@@ -61,6 +64,8 @@ class UBToolbarButtonGroup : public QWidget
         int                  mCurrentIndex;
         bool                 mDisplayLabel;
         QActionGroup*        mActionGroup;
+        QString              mObjectNamePrefix;
+        QList<QColor>        mColors;
 
     public slots:
         void setCurrentIndex(int index);

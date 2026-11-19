@@ -266,7 +266,12 @@ constexpr qreal kMinCornerArm = 2.0;
 constexpr int kMaxStrokePieces = 380;
 
 constexpr qreal kCornerTurnDegrees = 30.0;
-constexpr qreal kCurveTurnEpsilon = 1.0;
+// The rounded-box outline samples each curved corner. The junction between a
+// straight side and the first/last sampled curve segment turns only ~3 deg,
+// while the interior curve samples turn ~7-11 deg. The epsilon must sit
+// between the two, otherwise the straight sides are misclassified as curved
+// and the whole outline is emitted solid.
+constexpr qreal kCurveTurnEpsilon = 4.5;
 
 qreal distanceBetween(const QPointF& a, const QPointF& b)
 {
@@ -888,9 +893,12 @@ QVector<StrokePiece> styledSegments(int kind, const QVector<QPointF>& outline,
         return pieces;
     }
 
+    // Rounded rectangles and squares are closed outlines with no sharp
+    // corners: use one continuous pattern along the whole path (straight
+    // sides and curved corners alike), like the ellipse.
     if (kind == kRoundedRectangleKind || kind == kRoundedSquareKind)
     {
-        emitRoundedBox(outline, dash, gap, dotted, pieces);
+        emitFittedLoop(outline, dash, gap, dotted, pieces);
         return pieces;
     }
 

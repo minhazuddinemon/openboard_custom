@@ -34,6 +34,7 @@
 
 #include "UBApplication.h"
 #include "UBSettings.h"
+#include "UBHealthMonitor.h"
 
 /* Uncomment this for memory leaks detection */
 /*
@@ -50,6 +51,11 @@ void ub_message_output(QtMsgType type, const QMessageLogContext& context, const 
     // We must temporarily remove the handler to avoid the infinite recursion of
     // ub_message_output -> qt_message_output -> ub_message_output -> qt_message_output ...
     QtMessageHandler previousHandler = qInstallMessageHandler(0);
+
+    // Warnings/criticals/fatals are also appended to the session health log.
+    // Keep the existing console/verbose-log behavior below.
+    if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+        UBHealthMonitor::logMessage(type, msg);
 
 #if defined(QT_NO_DEBUG)
     // Suppress qDebug output in release builds
@@ -169,8 +175,10 @@ int main(int argc, char *argv[])
     int result = 0;
     if (app.isPrimary())
     {
+        UBHealthMonitor::instance().start();
         qDebug() << "file name argument" << fileToOpen;
         result = app.exec(fileToOpen);
+        UBHealthMonitor::instance().stop();
     }
 
     app.cleanup();

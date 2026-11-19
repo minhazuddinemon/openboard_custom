@@ -96,6 +96,9 @@ class UBSettings : public QObject
 
         // Eraser related
         int eraserWidthIndex();
+        // Last used eraser kind: false = normal (pixel) eraser,
+        // true = stroke eraser.
+        bool strokeEraserSelected();
         qreal eraserFineWidth();
         qreal eraserMediumWidth();
         qreal eraserStrongWidth();
@@ -476,6 +479,7 @@ class UBSettings : public QObject
         void setShapeStrokeStyle(int style);
 
         void setEraserWidthIndex(int index);
+        void setStrokeEraserSelected(bool stroke);
         void setEraserFineWidth(qreal width);
         void setEraserMediumWidth(qreal width);
         void setEraserStrongWidth(qreal width);

@@ -328,6 +328,7 @@ protected:
     void rowsAboutToBeRemoved(const QModelIndex &parent, int start, int end) override;
 
 private:
+    void updateTheme();
     bool isAcceptable(const QModelIndex &dragIndex, const QModelIndex &atIndex);
     Qt::DropAction acceptableAction(const QModelIndex &dragIndex, const QModelIndex &atIndex);
     void updateIndexEnvirons(const QModelIndex &index);

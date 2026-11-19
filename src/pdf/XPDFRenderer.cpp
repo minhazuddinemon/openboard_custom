@@ -178,7 +178,9 @@ QString XPDFRenderer::title() const
 #endif
             if (title.isString())
             {
-#if POPPLER_VERSION_MAJOR > 0 || POPPLER_VERSION_MINOR >= 72
+#if POPPLER_VERSION_MAJOR >= 26
+                return QString::fromStdString(title.getString());
+#elif POPPLER_VERSION_MAJOR > 0 || POPPLER_VERSION_MINOR >= 72
                 return QString(title.getString()->c_str());
 #else
                 return QString(title.getString()->getCString());

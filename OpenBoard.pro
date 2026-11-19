@@ -473,8 +473,18 @@ linux-g++* {
         LIBS += -lquazip1-qt6
         INCLUDEPATH += "/usr/include/QuaZip-Qt6-1.4/quazip"
     } else {
-        LIBS += -lquazip5
-        INCLUDEPATH += "/usr/include/quazip5"
+        # QuaZip 1.x (e.g. Fedora 45+) advertises itself via pkg-config and
+        # installs its headers under QuaZip-Qt5-<version>. Fall back to the
+        # legacy names used by older distributions.
+        QUAZIP1_QT5_CFLAGS = $$system(pkg-config --cflags quazip1-qt5 2>/dev/null)
+        QUAZIP1_QT5_LIBS = $$system(pkg-config --libs quazip1-qt5 2>/dev/null)
+        !isEmpty(QUAZIP1_QT5_LIBS) {
+            QMAKE_CXXFLAGS += $$QUAZIP1_QT5_CFLAGS
+            LIBS += $$QUAZIP1_QT5_LIBS
+        } else {
+            LIBS += -lquazip5
+            INCLUDEPATH += "/usr/include/quazip5"
+        }
     }
 
     LIBS += -lpoppler
@@ -483,6 +493,9 @@ linux-g++* {
     QMAKE_CFLAGS += -fopenmp
     QMAKE_CXXFLAGS += -fopenmp
     QMAKE_LFLAGS += -fopenmp
+    # Export symbols so the health monitor's crash backtrace contains function
+    # names in release builds (addr2line still works with the printed offsets).
+    QMAKE_LFLAGS += -rdynamic
     UB_LIBRARY.path = $$DESTDIR
     UB_I18N.path = $$DESTDIR/i18n
     UB_ETC.path = $$DESTDIR
