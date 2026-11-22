@@ -34,7 +34,8 @@ UBGraphicsLaserStroke::UBGraphicsLaserStroke(const QColor &color,
                                              QGraphicsItem *parent)
     : QGraphicsObject(parent), mColor(color),
       mOuterWidth(qMax<qreal>(outerWidth, 1.0)),
-      mInnerWidth(qMax<qreal>(innerWidth, 1.0)), mHasPoint(false) {
+      mInnerWidth(qMax<qreal>(innerWidth, 1.0)), mHasPoint(false),
+      mPointCount(0) {
   setAcceptedMouseButtons(Qt::NoButton);
   setZValue(kLaserZValue);
   setOpacity(1.0);
@@ -63,6 +64,7 @@ void UBGraphicsLaserStroke::appendPoint(const QPointF &point) {
   }
 
   mLastPoint = point;
+  ++mPointCount;
   update();
 }
 

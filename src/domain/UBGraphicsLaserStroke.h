@@ -36,6 +36,10 @@ public:
 
   void appendPoint(const QPointF &point);
 
+  // Number of points actually recorded in this trail (used by the scene to
+  // bound the cost of one continuous stroke).
+  int pointCount() const { return mPointCount; }
+
   QRectF boundingRect() const override;
 
 protected:
@@ -49,6 +53,7 @@ private:
   qreal mOuterWidth;
   qreal mInnerWidth;
   bool mHasPoint;
+  int mPointCount;
 };
 
 #endif /* UBGRAPHICSLASERSTROKE_H_ */

@@ -1218,11 +1218,18 @@ void UBGraphicsScene::clearLassoPreview()
     mLassoPath = QPainterPath();
 }
 
+// Capacity limit for one continuous laser stroke. Chosen from measurements:
+// the two-pass paint cost grows with the point count and exceeds the ~16 ms
+// frame budget around 600-800 points, so cap well before that. Normal pointing
+// and explaining stay far below it.
+static constexpr int kLaserMaxStrokePoints = 800;
+
 void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
 {
     // Drawing again cancels any pending hold/fade: all previous laser strokes
     // become fully visible again and new points are appended to the same view.
     mLaserIdleMs = 0;
+    mLaserIdleTimer.invalidate();
 
     for (int i = mLaserStrokes.size() - 1; i >= 0; --i)
     {
@@ -1275,8 +1282,32 @@ void UBGraphicsScene::startLaserStroke(const QPointF& scenePos)
 
 void UBGraphicsScene::updateLaserStroke(const QPointF& scenePos)
 {
-    if (mCurrentLaserStroke)
-        mCurrentLaserStroke->appendPoint(scenePos);
+    if (!mCurrentLaserStroke)
+        return;
+
+    // Capacity limit: one continuous stroke must not grow without bound, or
+    // every appended point repaints an ever-larger path twice and the laser
+    // can no longer keep up with the pen. When the cap is reached, drop this
+    // whole trail at once (no fade, by design) and, if the pen is still down,
+    // continue with a fresh trail from the current position.
+    if (mCurrentLaserStroke->pointCount() >= kLaserMaxStrokePoints)
+    {
+        QPointer<UBGraphicsLaserStroke> expired = mCurrentLaserStroke;
+        mCurrentLaserStroke.clear();
+        mLaserStrokes.removeAll(expired);
+
+        // Never delete synchronously inside an input event.
+        if (expired->scene() == this)
+            QGraphicsScene::removeItem(expired);
+        expired->deleteLater();
+
+        if (mInputDeviceIsPressed)
+            startLaserStroke(scenePos);
+
+        return;
+    }
+
+    mCurrentLaserStroke->appendPoint(scenePos);
 }
 
 void UBGraphicsScene::finishLaserStroke()
@@ -1285,11 +1316,11 @@ void UBGraphicsScene::finishLaserStroke()
     // updateLaserStrokes() once neither input nor a live gesture is active.
     mCurrentLaserStroke.clear();
     mLaserIdleMs = 0;
+    mLaserIdleTimer.invalidate();
 }
 
 void UBGraphicsScene::updateLaserStrokes()
 {
-    constexpr qint64 tickMs = 16;
     constexpr qint64 holdMs = 1200;
     constexpr qint64 fadeMs = 600;
 
@@ -1306,6 +1337,7 @@ void UBGraphicsScene::updateLaserStrokes()
     if (mInputDeviceIsPressed || mCurrentLaserStroke)
     {
         mLaserIdleMs = 0;
+        mLaserIdleTimer.invalidate();
         foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
             if (stroke)
                 stroke->setOpacity(1.0);
@@ -1313,7 +1345,11 @@ void UBGraphicsScene::updateLaserStrokes()
         return;
     }
 
-    mLaserIdleMs += tickMs;
+    // Measure the idle time with a real clock so hold and fade take their
+    // nominal 1.2 s + 0.6 s even when the timer ticks are late.
+    if (!mLaserIdleTimer.isValid())
+        mLaserIdleTimer.start();
+    mLaserIdleMs = mLaserIdleTimer.elapsed();
 
     if (mLaserIdleMs <= holdMs)
     {
@@ -1368,6 +1404,7 @@ void UBGraphicsScene::scheduleLaserCleanup()
         {
             // Drawing resumed: cancel the cleanup and restore visibility.
             mLaserIdleMs = 0;
+            mLaserIdleTimer.invalidate();
             foreach (UBGraphicsLaserStroke* stroke, mLaserStrokes) {
                 if (stroke)
                     stroke->setOpacity(1.0);

@@ -29,6 +29,7 @@
 #define UBGRAPHICSSCENE_H_
 
 #include <QtGui>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <optional>
 #include <utility>
@@ -520,6 +521,7 @@ signals:
         QTimer* mLaserTimer;
         QList<QPointer<UBGraphicsLaserStroke>> mLaserStrokes;
         QPointer<UBGraphicsLaserStroke> mCurrentLaserStroke;
+        QElapsedTimer mLaserIdleTimer;
         qint64 mLaserIdleMs;
         bool mLaserCleanupScheduled;
 
