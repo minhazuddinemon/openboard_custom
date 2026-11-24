@@ -1,0 +1,160 @@
+=== TOP LEVEL ===
+build
+cmake
+CMakeLists.txt
+COPYRIGHT
+C++StandardHeaderFile.txt
+debug
+LICENSE
+Makefile
+Makefile.Debug
+Makefile.Release
+OpenBoard.pro
+plugins
+project_map.txt
+README.md
+release
+release_scripts
+resources
+src
+version.txt
+
+=== SOURCE DIRS (file count per folder) ===
+      1 OpenBoard.pro
+      1 plugins
+      1 plugins/cffadaptor
+      1 plugins/cffadaptor/resources
+      5 plugins/cffadaptor/src
+      1 resources
+      9 resources/forms
+     37 src/adaptors
+      7 src/api
+     11 src/board
+     38 src/core
+      7 src/customWidgets
+      9 src/desktop
+     17 src/document
+     59 src/domain
+     22 src/frameworks
+      1 src/globals
+    102 src/gui
+     13 src/network
+      7 src/pdf
+     57 src/pdf-merger
+      7 src/podcast
+      4 src/podcast/ffmpeg
+      2 src/podcast/intranet
+      5 src/podcast/quicktime
+      6 src/podcast/windowsmedia
+      2 src/podcast/youtube
+      5 src/singleapplication
+     21 src/tools
+      9 src/web
+     22 src/web/simplebrowser
+
+=== RECENT COMMITS ===
+30d120ce Update README for version 1.7.7 details
+ca74dc37 updated translations
+80167878 changed version to 1.7.7 (260323)
+f8cd7e5b don't force white background on widgets for Qt versions above 6.8.0
+bef2de38 Merge pull request #1434 from letsfindaway/build-poppler-26-02
+b636aa73 Merge pull request #1443 from letsfindaway/feat-document-version-converter
+74cf40dd Merge pull request #1445 from letsfindaway/fix-save-cookies
+0d56eb6f fix: enable Cookie storage
+7e2e28c9 feat: document converter 1.8.0 to 1.7.x
+d524a1b9 display a warning icon and message on broken documents to better inform the user on what to do with them
+95e69454 Update README for version 1.7.6 and new contributions
+80f5cd0b build: adapt to poppler 26.02
+f32fc4ba changed version to 1.7.6 (260225)
+b94b579a fixed a bug probably caused by the adding of new information between xstartref and the root object, making any pdf export to fail because it could not find the /Root object. Simply increased the size of the portion that is read to find it
+8975682d Merge pull request #1430 from letsfindaway/fix-arrange-thumbnails-on-show-palette
+dd0a4a7e fix: board thumbnails after duplicating scene
+1f295c3c fixed a crash occuring when document thumbnails view was trying to select a thumbnail of the wrong document
+53a5076c Update README for version 1.7.5
+43d786b3 changed version to 1.7.5 (260202)
+36fb6abf fix: drag&drop multiple pages and selection behavior
+25e30446 Merge remote-tracking branch 'origin/master' into 1.7.5-dev
+07cc13bd Merge pull request #853 from CryHavoc21/patch-1
+4794637b Fix formatting in README.md
+b18b1d34 Merge branch 'master' into patch-1
+05878839 fix: set pageCount to source value. Fixes #1407
+e6c73889 Update README for version 1.7.4
+bffaea89 changed version to 1.7.4 (260122)
+6b08c78e added 2 missing libraries on Windows installer
+41197866 Explicit cast to string_view
+b776779c fix menu icons not showing in macOS
+
+=== FILES CHANGED IN RECENT COMMITS (most touched first) ===
+    368 src/board/UBBoardController.cpp
+    341 src/domain/UBGraphicsScene.cpp
+    248 src/board/UBBoardView.cpp
+    232 src/document/UBDocumentController.cpp
+    214 src/adaptors/UBSvgSubsetAdaptor.cpp
+    183 src/core/UBPersistenceManager.cpp
+    175 OpenBoard.pro
+    171 src/core/UBSettings.cpp
+    148 src/core/UBApplication.cpp
+    145 src/core/UBApplicationController.cpp
+    142 src/domain/UBGraphicsItemDelegate.cpp
+    135 src/board/UBBoardPaletteManager.cpp
+    134 src/domain/UBGraphicsScene.h
+    127 Sankore_3.1.pro
+    122 src/core/UBSettings.h
+    119 src/desktop/UBDesktopAnnotationController.cpp
+    114 src/domain/UBGraphicsWidgetItem.cpp
+    108 src/gui/UBFeaturesWidget.cpp
+     94 src/board/UBFeaturesController.cpp
+     93 src/board/UBBoardController.h
+     93 resources/forms/preferences.ui
+     92 src/domain/UBGraphicsMediaItem.cpp
+     87 src/domain/UBGraphicsDelegateFrame.cpp
+     86 src/core/UBDisplayManager.cpp
+     83 src/domain/UBGraphicsTextItemDelegate.cpp
+     82 src/web/UBWebController.cpp
+     81 src/core/UBPreferencesController.cpp
+     80 src/gui/UBTeacherBarWidget.cpp
+     77 src/document/UBDocumentController.h
+     77 src/adaptors/UBCFFSubsetAdaptor.cpp
+     74 src/gui/UBThumbnailWidget.cpp
+     74 src/domain/UBGraphicsItemDelegate.h
+     71 src/gui/UBDocumentNavigator.cpp
+     71 src/domain/UBGraphicsTextItem.cpp
+     71 src/core/UBPersistenceManager.h
+     70 src/gui/UBTeacherGuideWidget.cpp
+     65 src/gui/UBDockPalette.cpp
+     63 src/domain/UBGraphicsWidgetItem.h
+     62 src/frameworks/UBPlatformUtils_mac.mm
+     60 src/board/UBBoardView.h
+
+=== UNCOMMITTED CHANGES ===
+ M OpenBoard.pro
+ M resources/etc/OpenBoard.css
+ M resources/i18n/OpenBoard_ar.ts
+ M src/adaptors/UBExportFullPDF.cpp
+ M src/adaptors/UBExportPDF.cpp
+ M src/board/UBBoardController.cpp
+ M src/board/UBBoardController.h
+ M src/board/UBBoardView.cpp
+ M src/board/UBBoardView.h
+ M src/board/UBDrawingController.cpp
+ M src/board/UBDrawingController.h
+ M src/core/UB.h
+ M src/core/UBSettings.cpp
+ M src/core/UBSettings.h
+ M src/document/UBDocumentController.cpp
+ M src/domain/UBGraphicsScene.cpp
+ M src/domain/UBGraphicsScene.h
+ M src/domain/UBSelectionFrame.cpp
+ M src/domain/UBSelectionFrame.h
+ M src/domain/domain.pri
+ M src/gui/UBFeaturesWidget.cpp
+ M src/gui/UBStylusPalette.cpp
+ M src/gui/UBStylusPalette.h
+ M src/gui/UBToolbarButtonGroup.cpp
+ M src/gui/UBToolbarButtonGroup.h
+ M src/podcast/podcast.pri
+?? project_map.txt
+?? src/domain/UBGraphicsItemColorUndoCommand.cpp
+?? src/domain/UBGraphicsItemColorUndoCommand.h
+?? src/domain/UBGraphicsLaserStroke.cpp
+?? src/domain/UBGraphicsLaserStroke.h

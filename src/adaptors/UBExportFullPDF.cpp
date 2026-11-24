@@ -32,6 +32,7 @@
 #include <QtCore>
 #include <QtSvg>
 #include <QPrinter>
+#include <QPainterPath>
 
 #include "core/UBApplication.h"
 #include "core/UBHealthMonitor.h"
@@ -195,6 +196,32 @@ void UBExportFullPDF::saveOverlayPdf(std::shared_ptr<UBDocumentProxy> pDocumentP
             {
                 pdfPainter->fillRect(pageRect, scene->isDarkBackground()
                                      ? QColor(Qt::black) : QColor(Qt::white));
+            }
+            else if (pdfItem)
+            {
+                // The original PDF is stamped below this transparent overlay and
+                // must stay visible and vector. When content (e.g. a pasted SVG)
+                // overflows the page, the scene is scaled down to fit and a
+                // margin appears around it. Paint that margin with the board
+                // background instead of leaving it white in the output.
+                //
+                // The merge places the base PDF at the page's top-left, scaled
+                // by the same factor used here, so subtracting this rect from
+                // the page keeps the PDF area itself transparent.
+                const qreal s = sourceRect.width() > 0.0
+                        ? contentRect.width() / sourceRect.width() : 1.0;
+                const QRectF pdfSceneRect = pdfItem->sceneBoundingRect();
+                const QRectF pdfOnPage(
+                        pageRect.topLeft()
+                            + (pdfSceneRect.topLeft() - sourceRect.topLeft()) * s,
+                        pdfSceneRect.size() * s);
+
+                QPainterPath pagePath;
+                pagePath.addRect(pageRect);
+                QPainterPath pdfPath;
+                pdfPath.addRect(pdfOnPage);
+                pdfPainter->fillPath(pagePath.subtracted(pdfPath),
+                                     isDark ? QColor(Qt::black) : QColor(Qt::white));
             }
 
             scene->render(pdfPainter, contentRect, sourceRect, Qt::IgnoreAspectRatio);
