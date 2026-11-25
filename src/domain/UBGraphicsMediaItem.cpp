@@ -588,7 +588,7 @@ void UBGraphicsMediaItem::setSize(int width, int height)
 UBItem* UBGraphicsAudioItem::deepCopy() const
 {
     QUrl url = this->mediaFileUrl();
-    UBGraphicsMediaItem *copy = new UBGraphicsAudioItem(url, parentItem());
+    UBGraphicsMediaItem *copy = new UBGraphicsAudioItem(url, 0);
 
     copy->setUuid(this->uuid()); // this is OK for now as long as Widgets are imutable
 
@@ -600,7 +600,7 @@ UBItem* UBGraphicsAudioItem::deepCopy() const
 UBItem* UBGraphicsVideoItem::deepCopy() const
 {
     QUrl url = this->mediaFileUrl();
-    UBGraphicsMediaItem *copy = new UBGraphicsVideoItem(url, parentItem());
+    UBGraphicsMediaItem *copy = new UBGraphicsVideoItem(url, 0);
 
     copy->setUuid(this->uuid());
     copyItemParameters(copy);

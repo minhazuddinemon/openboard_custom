@@ -3501,8 +3501,12 @@ void UBBoardController::cut()
 
         if (ubItem && ubGi && !mActiveScene->tools().contains(gi))
         {
-            selected << ubItem->deepCopy();
-            ubGi->remove();
+            UBItem* copy = ubItem->deepCopy();
+            if (copy)
+            {
+                selected << copy;
+                ubGi->remove();
+            }
         }
     }
 
@@ -3534,8 +3538,17 @@ void UBBoardController::copy()
         UBItem* ubItem = dynamic_cast<UBItem*>(gi);
 
         if (ubItem && !mActiveScene->tools().contains(gi))
-            selected << ubItem;
+        {
+            UBItem* copy = ubItem->deepCopy();
+            if (copy)
+                selected << copy;
+        }
     }
+
+    // The clipboard must own its items: it can outlive the page (and the
+    // scene that owns the originals). Storing raw pointers to scene items
+    // used to leave dangling entries that ClearUndoStack() dereferenced
+    // when reading sourceUrl(), causing a SIGSEGV.
 
     if (selected.size() > 0)
     {

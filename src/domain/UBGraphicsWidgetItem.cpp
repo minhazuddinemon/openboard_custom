@@ -1007,7 +1007,7 @@ void UBGraphicsAppleWidgetItem::setUuid(const QUuid &pUuid)
 
 UBItem* UBGraphicsAppleWidgetItem::deepCopy() const
 {
-    UBGraphicsAppleWidgetItem *appleWidget = new UBGraphicsAppleWidgetItem(mWebEngineView->url(), parentItem());
+    UBGraphicsAppleWidgetItem *appleWidget = new UBGraphicsAppleWidgetItem(mWebEngineView->url(), 0);
 
     copyItemParameters(appleWidget);
 
@@ -1198,7 +1198,7 @@ void UBGraphicsW3CWidgetItem::setUuid(const QUuid &pUuid)
 
 UBItem* UBGraphicsW3CWidgetItem::deepCopy() const
 {
-    UBGraphicsW3CWidgetItem *copy = new UBGraphicsW3CWidgetItem(mWidgetUrl, parentItem());
+    UBGraphicsW3CWidgetItem *copy = new UBGraphicsW3CWidgetItem(mWidgetUrl, 0);
     copy->setUuid(this->uuid()); // this is OK for now as long as Widgets are imutable
     copyItemParameters(copy);
 

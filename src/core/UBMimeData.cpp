@@ -30,6 +30,7 @@
 #include "UBMimeData.h"
 
 #include <QtGui>
+#include <QtAlgorithms>
 
 #include "core/UBApplication.h"
 #include "domain/UBItem.h"
@@ -67,5 +68,10 @@ UBMimeDataGraphicsItem::UBMimeDataGraphicsItem(QList<UBItem*> pItems)
 
 UBMimeDataGraphicsItem::~UBMimeDataGraphicsItem()
 {
-// Explanation: selected items are owned by the scene and handled by this class
+    // The mime data owns these item copies (created by
+    // UBBoardController::copy()/cut()). They are never added to a scene,
+    // so nothing else deletes them. Never store raw pointers to scene
+    // items here: the clipboard can outlive them.
+    qDeleteAll(mItems);
+    mItems.clear();
 }

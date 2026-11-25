@@ -114,7 +114,7 @@ void UBGraphicsPDFItem::paint(QPainter *painter, const QStyleOptionGraphicsItem 
 
 UBItem* UBGraphicsPDFItem::deepCopy() const
 {
-    UBGraphicsPDFItem *copy =  new UBGraphicsPDFItem(mRenderer, mPageNumber, parentItem());
+    UBGraphicsPDFItem *copy =  new UBGraphicsPDFItem(mRenderer, mPageNumber, 0);
 
     copy->setUuid(this->uuid()); // this is OK for now as long as Widgets are imutable
 
