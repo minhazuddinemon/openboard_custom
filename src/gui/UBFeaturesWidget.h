@@ -76,6 +76,7 @@ class UBFeaturesListView;
 class UBFeaturesWebView;
 class UBFeaturesNavigatorWidget;
 class UBFeaturesMimeData;
+class QMimeData;
 class UBFeaturesCentralWidget;
 class UBFeaturesNewFolderDialog;
 class UBFeaturesProgressBar;
@@ -167,9 +168,26 @@ protected:
     virtual void dragEnterEvent( QDragEnterEvent *event );
     virtual void dropEvent( QDropEvent *event );
     virtual void dragMoveEvent( QDragMoveEvent *event );
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void finishPenDrag(const QPoint &globalPos, bool cancel,
+                       bool swallowMouseRelease);
+    bool forwardTabletToBoard(QTabletEvent *event);
 
 private slots:
     void thumbnailSizeChanged(int);
+
+private:
+    // Pen/tablet input is translated into selection + a manual drag. Qt's
+    // QDrag cannot be started from tablet/synthesized input on Wayland
+    // (drag.exec returns IgnoreAction immediately), so the drop is
+    // delivered explicitly when the pen is released over the board.
+    bool mTabletPressed = false;
+    bool mTabletGestureDone = false;
+    bool mPenDragging = false;
+    bool mPenSwallowMouseRelease = false;
+    QPointF mTabletPressPos;
+    QPointF mPenDragGlobalPos;
+    QMimeData *mPenDragMimeData = nullptr;
 
 };
 

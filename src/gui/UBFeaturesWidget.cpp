@@ -30,6 +30,11 @@
 #include <QDomDocument>
 #include <QWebChannel>
 #include <QWidget>
+#include <QApplication>
+#include <QIcon>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QTabletEvent>
 
 #include "UBFeaturesWidget.h"
 #include "frameworks/UBFileSystemUtils.h"
@@ -37,6 +42,8 @@
 #include "core/UBDownloadManager.h"
 #include "globals/UBGlobals.h"
 #include "board/UBBoardController.h"
+#include "board/UBBoardView.h"
+#include "domain/UBGraphicsScene.h"
 #include "document/UBDocumentController.h"
 #include "web/UBWebController.h"
 
@@ -453,6 +460,328 @@ UBFeaturesListView::UBFeaturesListView( QWidget* parent, const char* name )
 {
     setObjectName(name);
     setDragDropOverwriteMode(true);
+
+    // Tablet/pen events are delivered to the viewport, and
+    // QAbstractScrollArea does not turn them into the mouse stream that
+    // QAbstractItemView uses to select items and start a drag. Translate
+    // them here so pen drag-and-drop behaves like mouse/touchpad drag.
+    viewport()->installEventFilter(this);
+}
+
+void UBFeaturesListView::finishPenDrag(const QPoint &globalPos, bool cancel,
+                                       bool swallowMouseRelease)
+{
+    if (!mPenDragging)
+        return;
+
+    mPenDragging = false;
+    mTabletPressed = false;
+    mTabletGestureDone = true;
+    mPenSwallowMouseRelease = swallowMouseRelease;
+    qApp->removeEventFilter(this);
+    QApplication::restoreOverrideCursor();
+    setState(QAbstractItemView::NoState);
+
+    QMimeData *mimeData = mPenDragMimeData;
+    mPenDragMimeData = nullptr;
+
+    if (!cancel && mimeData)
+    {
+        UBBoardView *targetView = nullptr;
+        QWidget *under = QApplication::widgetAt(globalPos);
+        for (QWidget *widget = under; widget; widget = widget->parentWidget())
+        {
+            targetView = qobject_cast<UBBoardView *>(widget);
+            if (targetView)
+                break;
+        }
+
+        if (!targetView)
+        {
+            // widgetAt() can fail on some platforms; check the views directly.
+            UBBoardView *views[] = { UBApplication::boardController->controlView(),
+                                     UBApplication::boardController->displayView() };
+            for (UBBoardView *view : views)
+            {
+                if (view && view->isVisible()
+                        && view->rect().contains(view->mapFromGlobal(globalPos)))
+                {
+                    targetView = view;
+                    break;
+                }
+            }
+        }
+
+        if (targetView
+                && targetView->viewport()->rect().contains(
+                       targetView->viewport()->mapFromGlobal(globalPos)))
+        {
+            const QPointF scenePos = targetView->mapToScene(
+                    targetView->viewport()->mapFromGlobal(globalPos));
+            qWarning() << "[PENDRAG] drop scenePos" << scenePos;
+
+            // Remember the items already in the scene so that the items
+            // added synchronously by processMimeData() can be placed at the
+            // pen position instead of the page center (large items are
+            // otherwise re-centered by scaleToFitDocumentSize()).
+            std::shared_ptr<UBGraphicsScene> scene =
+                    UBApplication::boardController->activeScene();
+            QSet<QGraphicsItem *> before;
+            if (scene)
+            {
+                for (QGraphicsItem *item : scene->items())
+                    before.insert(item);
+            }
+
+            UBApplication::boardController->processMimeData(mimeData, scenePos, 1.0);
+
+            if (scene)
+            {
+                int index = 0;
+                for (QGraphicsItem *item : scene->items())
+                {
+                    if (before.contains(item) || item->parentItem())
+                        continue;
+                    const QPointF target = scenePos + QPointF(index * 15, index * 15);
+                    item->setPos(item->pos()
+                                 + target - item->sceneBoundingRect().center());
+                    ++index;
+                }
+                if (index > 0)
+                    qWarning() << "[PENDRAG] repositioned items" << index;
+            }
+        }
+        else
+        {
+            qWarning() << "[PENDRAG] drop outside board, cancelled";
+        }
+    }
+
+    delete mimeData;
+}
+
+// On Wayland the tablet tool can keep delivering events to the surface
+// where the pen was pressed, even after the pen moved over the board.
+// Forward those events to the board view under the pen so drawing and
+// selection keep working and the library does not start a drag.
+bool UBFeaturesListView::forwardTabletToBoard(QTabletEvent *event)
+{
+    const QPointF globalPos = event->globalPosF();
+    QWidget *under = QApplication::widgetAt(globalPos.toPoint());
+    UBBoardView *view = nullptr;
+    for (QWidget *widget = under; widget; widget = widget->parentWidget())
+    {
+        view = qobject_cast<UBBoardView *>(widget);
+        if (view)
+            break;
+    }
+    if (!view && UBApplication::boardController)
+    {
+        UBBoardView *views[] = { UBApplication::boardController->controlView(),
+                                 UBApplication::boardController->displayView() };
+        for (UBBoardView *candidate : views)
+        {
+            if (candidate && candidate->isVisible()
+                    && candidate->rect().contains(candidate->mapFromGlobal(
+                           globalPos.toPoint())))
+            {
+                view = candidate;
+                break;
+            }
+        }
+    }
+    if (!view)
+        return false;
+
+    QWidget *target = view->viewport();
+    const QPoint localPos = target->mapFromGlobal(globalPos.toPoint());
+    if (!target->rect().contains(localPos))
+        return false;
+
+    QTabletEvent forwarded(event->type(), QPointF(localPos), globalPos,
+                           event->device(), event->pointerType(),
+                           event->pressure(), event->xTilt(), event->yTilt(),
+                           event->tangentialPressure(), event->rotation(),
+                           event->z(), event->modifiers(), event->uniqueId());
+    if (event->type() == QEvent::TabletPress
+            || event->type() == QEvent::TabletRelease)
+    {
+        qWarning() << "[PENDRAG] forward tablet" << event->type()
+                   << "to board local" << localPos;
+    }
+    QApplication::sendEvent(target, &forwarded);
+    return true;
+}
+
+bool UBFeaturesListView::eventFilter(QObject *watched, QEvent *event)
+{
+    const QEvent::Type type = event->type();
+
+    if (mPenDragging)
+    {
+        switch (type)
+        {
+        case QEvent::TabletMove:
+            mPenDragGlobalPos = static_cast<QTabletEvent *>(event)->globalPosF();
+            return true;
+        case QEvent::MouseMove:
+            mPenDragGlobalPos = static_cast<QMouseEvent *>(event)->globalPos();
+            return true;
+        case QEvent::TabletRelease:
+            finishPenDrag(static_cast<QTabletEvent *>(event)->globalPosF().toPoint(),
+                          false, true);
+            return true;
+        case QEvent::MouseButtonRelease:
+            finishPenDrag(static_cast<QMouseEvent *>(event)->globalPos(), false, false);
+            return true;
+        case QEvent::TabletLeaveProximity:
+            finishPenDrag(QPoint(), true, false);
+            return true;
+        case QEvent::MouseButtonPress:
+            return true;
+        default:
+            break;
+        }
+    }
+
+    if (watched != viewport())
+        return QListView::eventFilter(watched, event);
+
+    // Swallow the mouse stream Qt synthesizes from the pen so the view does
+    // not start a rubber-band selection or its own (unsupported) QDrag.
+    if (mTabletPressed
+            && (type == QEvent::MouseButtonPress || type == QEvent::MouseMove
+                || type == QEvent::MouseButtonRelease))
+    {
+        return true;
+    }
+    if (mPenSwallowMouseRelease && type == QEvent::MouseButtonRelease)
+    {
+        mPenSwallowMouseRelease = false;
+        return true;
+    }
+    if (mPenSwallowMouseRelease && type == QEvent::MouseButtonPress)
+    {
+        // A real pointer press (touchpad) must not be swallowed.
+        mPenSwallowMouseRelease = false;
+    }
+
+    if (type == QEvent::TabletLeaveProximity)
+    {
+        mTabletPressed = false;
+        mTabletGestureDone = false;
+        return true;
+    }
+
+    if (type != QEvent::TabletPress && type != QEvent::TabletMove
+            && type != QEvent::TabletRelease)
+    {
+        return QListView::eventFilter(watched, event);
+    }
+
+    QTabletEvent *tabletEvent = static_cast<QTabletEvent *>(event);
+
+    // The compositor can route events that happen over the board back to
+    // this surface. They are outside the list: give them to the board.
+    if (!viewport()->rect().contains(tabletEvent->posF().toPoint()))
+    {
+        if (forwardTabletToBoard(tabletEvent))
+            return true;
+        // Outside the list and not over a board view: do not start a
+        // library drag from such coordinates.
+        return true;
+    }
+
+    if (type == QEvent::TabletPress)
+    {
+        mTabletPressed = true;
+        mTabletGestureDone = false;
+        mPenSwallowMouseRelease = false;
+        mTabletPressPos = tabletEvent->posF();
+        {
+            QWidget *under = QApplication::widgetAt(
+                    tabletEvent->globalPosF().toPoint());
+            qWarning() << "[PENDRAG] library press pos" << mTabletPressPos
+                       << "under" << (under ? under->metaObject()->className() : "null")
+                       << "dragging" << mPenDragging;
+        }
+
+        // Forward only the press, so selection, the current index and the
+        // properties panel behave exactly like with a mouse.
+        QMouseEvent mouseEvent(QEvent::MouseButtonPress, tabletEvent->posF(),
+                               tabletEvent->globalPosF(), Qt::LeftButton,
+                               Qt::LeftButton, tabletEvent->modifiers());
+        QListView::mousePressEvent(&mouseEvent);
+        return true;
+    }
+
+    if (type == QEvent::TabletMove)
+    {
+        if (!mTabletPressed || mTabletGestureDone)
+            return true;
+
+        if ((tabletEvent->posF() - mTabletPressPos).manhattanLength()
+                < QApplication::startDragDistance())
+            return true;
+
+        const QModelIndex index = indexAt(mTabletPressPos.toPoint());
+        QModelIndexList draggable;
+        for (const QModelIndex &selected : selectionModel()->selectedIndexes())
+        {
+            if (selected.flags() & Qt::ItemIsDragEnabled)
+                draggable << selected;
+        }
+        if (draggable.isEmpty() && index.isValid()
+                && (index.flags() & Qt::ItemIsDragEnabled))
+            draggable << index;
+
+        if (draggable.isEmpty())
+        {
+            mTabletGestureDone = true;
+            return true;
+        }
+
+        QMimeData *mimeData = model()->mimeData(draggable);
+        if (!mimeData)
+        {
+            mTabletGestureDone = true;
+            return true;
+        }
+
+        mPenDragMimeData = mimeData;
+        mPenDragGlobalPos = tabletEvent->globalPosF();
+        mPenDragging = true;
+        qApp->installEventFilter(this);
+
+        // Show the dragged item under the pen as the cursor (works on
+        // Wayland, where a separate top-level preview window cannot be
+        // positioned by the client).
+        const QIcon icon = qvariant_cast<QIcon>(model()->data(index, Qt::DecorationRole));
+        const QPixmap pixmap = icon.pixmap(QSize(96, 96));
+        if (!pixmap.isNull())
+            QApplication::setOverrideCursor(QCursor(pixmap, pixmap.width() / 2,
+                                                    pixmap.height() / 2));
+        else
+            QApplication::setOverrideCursor(Qt::DragCopyCursor);
+
+        qWarning() << "[PENDRAG] manual drag start items" << draggable.size();
+        return true;
+    }
+
+    // TabletRelease without a drag: forward the release so clicks behave
+    // like mouse clicks.
+    if (!mTabletGestureDone && mTabletPressed)
+    {
+        QMouseEvent mouseEvent(QEvent::MouseButtonRelease, tabletEvent->posF(),
+                               tabletEvent->globalPosF(), Qt::LeftButton,
+                               Qt::NoButton, tabletEvent->modifiers());
+        QListView::mouseReleaseEvent(&mouseEvent);
+    }
+
+    mTabletPressed = false;
+    mTabletGestureDone = false;
+    mPenSwallowMouseRelease = true;
+    return true;
 }
 
 void UBFeaturesListView::dragEnterEvent( QDragEnterEvent *event )
