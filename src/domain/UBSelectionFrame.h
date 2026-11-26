@@ -60,6 +60,7 @@ public:
     void updateRect();
     void updateScale();
     Qt::CursorShape hoverCursor(const QPointF &scenePos) const;
+    bool interiorGrabbable() const;
     bool isEmpty() const {return this->rect().isEmpty();}
     virtual int type() const {return Type;}
 

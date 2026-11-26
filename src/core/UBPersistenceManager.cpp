@@ -1088,42 +1088,25 @@ void UBPersistenceManager::moveSceneToIndex(std::shared_ptr<UBDocumentProxy> pro
 
 std::shared_ptr<UBGraphicsScene> UBPersistenceManager::loadDocumentScene(std::shared_ptr<UBDocumentProxy> proxy, int sceneIndex, bool cacheNeighboringScenes)
 {
-    QElapsedTimer loadTiming; // TEMP-PAGETIMING
-    loadTiming.start(); // TEMP-PAGETIMING
-    const bool cachedBefore = mSceneCache.contains(proxy, sceneIndex); // TEMP-PAGETIMING
     mSceneCache.prepareLoading(proxy, sceneIndex);
-    const qint64 prepareMs = loadTiming.elapsed(); // TEMP-PAGETIMING
     auto scene = mSceneCache.value(proxy, sceneIndex);
     qDebug() << "loadDocumentScene: got result from cache";
-    // TEMP-PAGETIMING
-    qWarning() << "[PAGETIMING] loadDocumentScene page" << sceneIndex
-               << "cachedBefore" << cachedBefore
-               << "prepareMs" << prepareMs
-               << "finishMs" << (loadTiming.elapsed() - prepareMs)
-               << "totalMs" << loadTiming.elapsed()
-               << "sceneOk" << (scene != nullptr);
 
     if (cacheNeighboringScenes)
     {
         if(sceneIndex + 1 < proxy->pageCount() &&  !mSceneCache.contains(proxy, sceneIndex + 1))
         {
-            QElapsedTimer neighborTimer; neighborTimer.start(); // TEMP-PAGETIMING
             mSceneCache.prepareLoading(proxy,sceneIndex+1);
-            qWarning() << "[PAGETIMING] prefetchPrepare page" << sceneIndex+1 << "ms" << neighborTimer.elapsed(); // TEMP-PAGETIMING
         }
 
         if(sceneIndex + 2 < proxy->pageCount() &&  !mSceneCache.contains(proxy, sceneIndex + 2))
         {
-            QElapsedTimer neighborTimer; neighborTimer.start(); // TEMP-PAGETIMING
             mSceneCache.prepareLoading(proxy,sceneIndex+2);
-            qWarning() << "[PAGETIMING] prefetchPrepare page" << sceneIndex+2 << "ms" << neighborTimer.elapsed(); // TEMP-PAGETIMING
         }
 
         if(sceneIndex - 1 >= 0 &&  !mSceneCache.contains(proxy, sceneIndex - 1))
         {
-            QElapsedTimer neighborTimer; neighborTimer.start(); // TEMP-PAGETIMING
             mSceneCache.prepareLoading(proxy,sceneIndex-1);
-            qWarning() << "[PAGETIMING] prefetchPrepare page" << sceneIndex-1 << "ms" << neighborTimer.elapsed(); // TEMP-PAGETIMING
         }
     }
 
@@ -1142,8 +1125,6 @@ void UBPersistenceManager::reassignDocProxy(std::shared_ptr<UBDocumentProxy> new
 
 void UBPersistenceManager::persistDocumentScene(std::shared_ptr<UBDocumentProxy> pDocumentProxy, std::shared_ptr<UBGraphicsScene> pScene, const int pSceneIndex, bool isAnAutomaticBackup, bool forceImmediateSaving)
 {
-    QElapsedTimer persistTiming; // TEMP-PAGETIMING
-    persistTiming.start(); // TEMP-PAGETIMING
     checkIfDocumentRepositoryExists();
 
     if (!isAnAutomaticBackup)
@@ -1153,43 +1134,24 @@ void UBPersistenceManager::persistDocumentScene(std::shared_ptr<UBDocumentProxy>
 
     QDir dir(pDocumentProxy->persistencePath());
     dir.mkpath(pDocumentProxy->persistencePath());
-    const qint64 prepMs = persistTiming.elapsed(); // TEMP-PAGETIMING
-
-    qint64 svgMs = 0; // TEMP-PAGETIMING
-    qint64 deepCopyMs = 0; // TEMP-PAGETIMING
 
     if(forceImmediateSaving)
     {
-        QElapsedTimer svgTimer; svgTimer.start(); // TEMP-PAGETIMING
         UBSvgSubsetAdaptor::persistScene(pDocumentProxy, pScene, pSceneIndex);
-        svgMs = svgTimer.elapsed(); // TEMP-PAGETIMING
     }
     else
     {
-       QElapsedTimer copyTimer; copyTimer.start(); // TEMP-PAGETIMING
        std::shared_ptr<UBGraphicsScene> copiedScene = pScene->sceneDeepCopy();
-       deepCopyMs = copyTimer.elapsed(); // TEMP-PAGETIMING
        mWorker->saveScene(pDocumentProxy, copiedScene.get(), pSceneIndex);
 
        // keep copiedScene alive until saving is finished
        mScenesToSave.append(copiedScene);
     }
 
-    QElapsedTimer thumbTimer; thumbTimer.start(); // TEMP-PAGETIMING
     UBThumbnailAdaptor::persistScene(pDocumentProxy, pScene, pSceneIndex);
-    const qint64 thumbMs = thumbTimer.elapsed(); // TEMP-PAGETIMING
     pScene->setModified(false);
 
     mSceneCache.insert(pDocumentProxy, pSceneIndex, pScene);
-
-    // TEMP-PAGETIMING
-    qWarning() << "[PAGETIMING] persistScene page" << pSceneIndex
-               << "forceImmediate" << forceImmediateSaving
-               << "prepMs" << prepMs
-               << "svgWriteMs" << svgMs
-               << "deepCopyMs" << deepCopyMs
-               << "thumbnailMs" << thumbMs
-               << "totalMs" << persistTiming.elapsed();
 }
 
 

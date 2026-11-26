@@ -346,11 +346,7 @@ std::shared_ptr<UBGraphicsScene> UBSvgSubsetAdaptor::loadScene(std::shared_ptr<U
 
 std::shared_ptr<UBSvgSubsetAdaptor::UBSvgReaderContext> UBSvgSubsetAdaptor::prepareLoadingScene(std::shared_ptr<UBDocumentProxy> proxy, const int pageIndex)
 {
-    QElapsedTimer readTimer; readTimer.start(); // TEMP-PAGETIMING
     const auto fileContent = loadSceneAsText(proxy, pageIndex);
-    // TEMP-PAGETIMING
-    qWarning() << "[PAGETIMING] svgRead page" << pageIndex
-               << "bytes" << fileContent.size() << "ms" << readTimer.elapsed();
     auto context = std::make_shared<UBSvgReaderContext>(proxy, fileContent);
     return context;
 }
@@ -378,7 +374,6 @@ std::shared_ptr<UBGraphicsScene> UBSvgSubsetAdaptor::UBSvgSubsetReader::loadScen
     }
 
     qDebug() << "spent milliseconds: " << time.elapsed();
-    qWarning() << "[PAGETIMING] svgSyncParse ms" << time.elapsed(); // TEMP-PAGETIMING
     return scene();
 }
 

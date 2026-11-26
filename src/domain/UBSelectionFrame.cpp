@@ -184,7 +184,36 @@ QPainterPath UBSelectionFrame::shape() const
         resShape = resShape.subtracted(extruded);
     }
 
+    // With the Selector and Lasso tools, a press anywhere inside the selection
+    // rectangle must drag the whole selection instead of starting a new one.
+    // Including the interior makes the frame the target of those presses.
+    // Resize grips and delegate buttons are child items, so they keep priority.
+    if (interiorGrabbable())
+        resShape.addRect(ownRect);
+
     return resShape;
+}
+
+bool UBSelectionFrame::interiorGrabbable() const
+{
+    if (mIsLocked || mEnclosedtems.isEmpty())
+        return false;
+
+    UBDrawingController *dc = UBDrawingController::drawingController();
+    if (!dc)
+        return false;
+
+    const int tool = dc->stylusTool();
+    if (tool != UBStylusTool::Selector && tool != UBStylusTool::Lasso)
+        return false;
+
+    // Keep a lone selected text item clickable so that it can still be edited.
+    if (mEnclosedtems.size() == 1
+            && mEnclosedtems.first()->delegated()
+            && mEnclosedtems.first()->delegated()->type() == UBGraphicsItemType::TextItemType)
+        return false;
+
+    return true;
 }
 
 void UBSelectionFrame::setEnclosedItems(const QList<QGraphicsItem*> pGraphicsItems)

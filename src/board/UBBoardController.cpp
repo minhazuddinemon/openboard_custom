@@ -2264,27 +2264,6 @@ UBItem *UBBoardController::downloadFinished(bool pSuccess, QUrl sourceUrl, QUrl 
     return NULL;
 }
 
-// TEMP-PAGETIMING: remove this helper together with all [PAGETIMING] logs.
-namespace {
-class UBPageSwitchTiming
-{
-public:
-    UBPageSwitchTiming() { mTimer.start(); }
-    void mark(const char* name)
-    {
-        const qint64 now = mTimer.elapsed();
-        mParts << QString("%1=%2").arg(QLatin1String(name)).arg(now - mLast);
-        mLast = now;
-    }
-    qint64 total() const { return mTimer.elapsed(); }
-    QString summary() const { return mParts.join(QLatin1Char(' ')); }
-private:
-    QElapsedTimer mTimer;
-    qint64 mLast = 0;
-    QStringList mParts;
-};
-} // namespace
-
 std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(int pSceneIndex)
 {
     return setActiveDocumentScene(selectedDocument(), pSceneIndex);
@@ -2293,9 +2272,7 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(int p
 std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::shared_ptr<UBDocumentProxy> pDocumentProxy, const int pSceneIndex, bool forceReload, bool onImport)
 {
     UBApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
-    UBPageSwitchTiming pageSwitchTiming; // TEMP-PAGETIMING
     persistViewPositionOnCurrentScene();
-    pageSwitchTiming.mark("saveView"); // TEMP-PAGETIMING
 
     // Finalize an in-progress free triangle and stop the Pen/Marker
     // hold-to-straighten timer before leaving the page.
@@ -2304,7 +2281,6 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
         mActiveScene->commitShapeEditing();
         mActiveScene->stopStraightenHold();
     }
-    pageSwitchTiming.mark("commitShape"); // TEMP-PAGETIMING
 
     bool documentChange = selectedDocument() != pDocumentProxy;
 
@@ -2313,11 +2289,7 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
     if (index >= sceneCount && sceneCount > 0)
         index = sceneCount - 1;
 
-    // TEMP-PAGETIMING
-    const bool targetWasCached = UBPersistenceManager::persistenceManager()->isSceneInCached(pDocumentProxy, index);
-
     std::shared_ptr<UBGraphicsScene> targetScene = UBPersistenceManager::persistenceManager()->loadDocumentScene(pDocumentProxy, index);
-    pageSwitchTiming.mark("loadScene"); // TEMP-PAGETIMING
 
     bool sceneChange = targetScene != mActiveScene;
 
@@ -2326,25 +2298,19 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
         if (mActiveScene && !onImport)
         {
             persistCurrentScene();
-            pageSwitchTiming.mark("persistPrev"); // TEMP-PAGETIMING
             freezeW3CWidgets(true);
-            pageSwitchTiming.mark("freezeWidgets"); // TEMP-PAGETIMING
             ClearUndoStack();
-            pageSwitchTiming.mark("clearUndo"); // TEMP-PAGETIMING
         }else
         {
             UBApplication::undoStack->clear();
-            pageSwitchTiming.mark("clearUndo"); // TEMP-PAGETIMING
         }
 
         mActiveScene = targetScene;
         mActiveSceneIndex = index;
 
         setDocument(pDocumentProxy, forceReload);
-        pageSwitchTiming.mark("setDocument"); // TEMP-PAGETIMING
 
         updateSystemScaleFactor();
-        pageSwitchTiming.mark("systemScale"); // TEMP-PAGETIMING
 
         if (mControlView->scene())
         {
@@ -2353,36 +2319,27 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
 
         mControlView->setScene(mActiveScene.get());
         connect(UBApplication::undoStack.data(), SIGNAL(indexChanged(int)), mControlView->scene().get(), SLOT(updateSelectionFrameWrapper(int)));
-        pageSwitchTiming.mark("controlView"); // TEMP-PAGETIMING
 
         mDisplayView->setScene(mActiveScene.get());
-        pageSwitchTiming.mark("displayView"); // TEMP-PAGETIMING
         mActiveScene->setBackgroundZoomFactor(mControlView->transform().m11());
         pDocumentProxy->setDefaultDocumentSize(mActiveScene->nominalSize());
         updatePageSizeState();
-        pageSwitchTiming.mark("pageSize"); // TEMP-PAGETIMING
 
         // Every page load/switch restores the per-page view state above; apply
         // the stylus-palette clearance offset afterwards so pages are centered
         // in the visible canvas by default.
         centerOnDefaultPosition();
-        pageSwitchTiming.mark("center"); // TEMP-PAGETIMING
 
         adjustDisplayViews();
-        pageSwitchTiming.mark("adjustViews"); // TEMP-PAGETIMING
 
         UBSettings::settings()->setDarkBackground(mActiveScene->isDarkBackground());
         UBSettings::settings()->setPageBackground(mActiveScene->pageBackground());
-        pageSwitchTiming.mark("settings"); // TEMP-PAGETIMING
 
         freezeW3CWidgets(false);
-        pageSwitchTiming.mark("unfreezeWidgets"); // TEMP-PAGETIMING
 
         selectionChanged();
-        pageSwitchTiming.mark("selection"); // TEMP-PAGETIMING
 
         updateBackgroundActionsState(mActiveScene->isDarkBackground(), mActiveScene->pageBackground());
-        pageSwitchTiming.mark("bgActions"); // TEMP-PAGETIMING
 
         if (documentChange)
         {
@@ -2393,10 +2350,8 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
         {
             emit activeSceneChanged();
         }
-        pageSwitchTiming.mark("sceneChangedSlots"); // TEMP-PAGETIMING
 
         pDocumentProxy->setLastVisitedSceneIndex(mActiveSceneIndex);
-        pageSwitchTiming.mark("lastVisited"); // TEMP-PAGETIMING
 
         UBFeaturesController* featuresController = paletteManager()->featuresWidget()->getFeaturesController();
 
@@ -2416,19 +2371,10 @@ std::shared_ptr<UBGraphicsScene> UBBoardController::setActiveDocumentScene(std::
             }
         }
 
-        pageSwitchTiming.mark("features"); // TEMP-PAGETIMING
 
         auto document = UBDocument::getDocument(pDocumentProxy);
         document->thumbnailScene()->hightlightItem(mActiveSceneIndex, true);
-        pageSwitchTiming.mark("thumbHighlight"); // TEMP-PAGETIMING
 
-        // TEMP-PAGETIMING
-        qWarning().noquote() << "[PAGETIMING] switch page" << index << "of" << sceneCount
-                             << "cachedBefore" << targetWasCached
-                             << "sceneChange" << sceneChange
-                             << "onImport" << onImport
-                             << "totalMs" << pageSwitchTiming.total()
-                             << "|" << pageSwitchTiming.summary();
     }
     else
     {
@@ -3238,8 +3184,6 @@ void UBBoardController::show()
 
 void UBBoardController::persistCurrentScene(bool isAnAutomaticBackup, bool forceImmediateSave)
 {
-    QElapsedTimer persistTiming; // TEMP-PAGETIMING
-    persistTiming.start(); // TEMP-PAGETIMING
     // Finalize an in-progress free triangle before a real save/page/close
     // boundary. Automatic backups leave the editing state untouched; the
     // preview polygons are ordinary stroke polygons and serialize safely.
@@ -3251,19 +3195,13 @@ void UBBoardController::persistCurrentScene(bool isAnAutomaticBackup, bool force
             && (mActiveSceneIndex >= 0) && mActiveSceneIndex != mMovingSceneIndex)
     {
         mActiveScene->saveWidgetSnapshots();
-        const qint64 widgetSnapshotsMs = persistTiming.elapsed(); // TEMP-PAGETIMING
 
-        const bool wasModified = mActiveScene->isModified(); // TEMP-PAGETIMING
+        const bool wasModified = mActiveScene->isModified();
         if (wasModified)
         {
             auto document = UBDocument::getDocument(selectedDocument());
             document->persistPage(mActiveScene, mActiveSceneIndex, isAnAutomaticBackup, forceImmediateSave);
         }
-        // TEMP-PAGETIMING
-        qWarning() << "[PAGETIMING] persistCurrentScene modified" << wasModified
-                   << "widgetSnapshotsMs" << widgetSnapshotsMs
-                   << "persistPageMs" << (persistTiming.elapsed() - widgetSnapshotsMs)
-                   << "totalMs" << persistTiming.elapsed();
     }
 }
 

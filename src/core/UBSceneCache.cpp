@@ -304,7 +304,6 @@ void UBSceneCache::insertEntry(UBSceneCacheID key, std::shared_ptr<SceneCacheEnt
 
 UBSceneCache::SceneCacheEntry::SceneCacheEntry(std::shared_ptr<UBDocumentProxy> proxy, int pageIndex)
 {
-    mTimingPage = pageIndex; // TEMP-PAGETIMING
     mContext = UBSvgSubsetAdaptor::prepareLoadingScene(proxy, pageIndex);
 }
 
@@ -323,9 +322,6 @@ UBSceneCache::SceneCacheEntry::~SceneCacheEntry()
 
 void UBSceneCache::SceneCacheEntry::startLoading()
 {
-    mTimingTimer.start(); // TEMP-PAGETIMING
-    mTimingSteps = 0; // TEMP-PAGETIMING
-    qWarning() << "[PAGETIMING] bgLoad start page" << mTimingPage; // TEMP-PAGETIMING
     mTimer = new QTimer;
     QObject::connect(mTimer, &QTimer::timeout, mTimer, [this](){
         if (UBApplication::isClosing)
@@ -337,12 +333,7 @@ void UBSceneCache::SceneCacheEntry::startLoading()
 
         if (mContext)
         {
-            QElapsedTimer stepTimer; stepTimer.start(); // TEMP-PAGETIMING
             mContext->step();
-            ++mTimingSteps; // TEMP-PAGETIMING
-            const qint64 stepMs = stepTimer.elapsed(); // TEMP-PAGETIMING
-            if (stepMs >= 16) // TEMP-PAGETIMING
-                qWarning() << "[PAGETIMING] bgLoad slowStep page" << mTimingPage << "ms" << stepMs; // TEMP-PAGETIMING
 
             if (mContext->isFinished())
             {
@@ -351,8 +342,6 @@ void UBSceneCache::SceneCacheEntry::startLoading()
                 mTimer->stop();
                 delete mTimer;
                 mTimer = nullptr;
-                qWarning() << "[PAGETIMING] bgLoad done page" << mTimingPage // TEMP-PAGETIMING
-                           << "ms" << mTimingTimer.elapsed() << "steps" << mTimingSteps; // TEMP-PAGETIMING
             }
         }
     });
@@ -369,8 +358,6 @@ std::shared_ptr<UBGraphicsScene> UBSceneCache::SceneCacheEntry::scene()
 {
     if (mContext && !mScene)
     {
-        QElapsedTimer blockTimer; blockTimer.start(); // TEMP-PAGETIMING
-        int blockSteps = 0; // TEMP-PAGETIMING
         // finish loading
         if (mTimer)
         {
@@ -382,13 +369,10 @@ std::shared_ptr<UBGraphicsScene> UBSceneCache::SceneCacheEntry::scene()
         while (!mContext->isFinished())
         {
             mContext->step();
-            ++blockSteps; // TEMP-PAGETIMING
         }
 
         mScene = mContext->scene();
         mContext = nullptr;
-        qWarning() << "[PAGETIMING] bgLoad blockingFinish page" << mTimingPage // TEMP-PAGETIMING
-                   << "ms" << blockTimer.elapsed() << "steps" << blockSteps; // TEMP-PAGETIMING
     }
 
     return mScene;

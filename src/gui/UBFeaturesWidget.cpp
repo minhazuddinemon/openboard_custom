@@ -518,7 +518,6 @@ void UBFeaturesListView::finishPenDrag(const QPoint &globalPos, bool cancel,
         {
             const QPointF scenePos = targetView->mapToScene(
                     targetView->viewport()->mapFromGlobal(globalPos));
-            qWarning() << "[PENDRAG] drop scenePos" << scenePos;
 
             // Remember the items already in the scene so that the items
             // added synchronously by processMimeData() can be placed at the
@@ -547,13 +546,7 @@ void UBFeaturesListView::finishPenDrag(const QPoint &globalPos, bool cancel,
                                  + target - item->sceneBoundingRect().center());
                     ++index;
                 }
-                if (index > 0)
-                    qWarning() << "[PENDRAG] repositioned items" << index;
             }
-        }
-        else
-        {
-            qWarning() << "[PENDRAG] drop outside board, cancelled";
         }
     }
 
@@ -603,12 +596,6 @@ bool UBFeaturesListView::forwardTabletToBoard(QTabletEvent *event)
                            event->pressure(), event->xTilt(), event->yTilt(),
                            event->tangentialPressure(), event->rotation(),
                            event->z(), event->modifiers(), event->uniqueId());
-    if (event->type() == QEvent::TabletPress
-            || event->type() == QEvent::TabletRelease)
-    {
-        qWarning() << "[PENDRAG] forward tablet" << event->type()
-                   << "to board local" << localPos;
-    }
     QApplication::sendEvent(target, &forwarded);
     return true;
 }
@@ -698,13 +685,6 @@ bool UBFeaturesListView::eventFilter(QObject *watched, QEvent *event)
         mTabletGestureDone = false;
         mPenSwallowMouseRelease = false;
         mTabletPressPos = tabletEvent->posF();
-        {
-            QWidget *under = QApplication::widgetAt(
-                    tabletEvent->globalPosF().toPoint());
-            qWarning() << "[PENDRAG] library press pos" << mTabletPressPos
-                       << "under" << (under ? under->metaObject()->className() : "null")
-                       << "dragging" << mPenDragging;
-        }
 
         // Forward only the press, so selection, the current index and the
         // properties panel behave exactly like with a mouse.
@@ -764,7 +744,6 @@ bool UBFeaturesListView::eventFilter(QObject *watched, QEvent *event)
         else
             QApplication::setOverrideCursor(Qt::DragCopyCursor);
 
-        qWarning() << "[PENDRAG] manual drag start items" << draggable.size();
         return true;
     }
 

@@ -140,7 +140,6 @@ void UBThumbnailAdaptor::persistScene(std::shared_ptr<UBDocumentProxy> proxy, st
 
     if (pScene->isModified() || overrideModified || !thumbFile.exists())
     {
-        QElapsedTimer thumbTimer; thumbTimer.start(); // TEMP-PAGETIMING
         qreal nominalWidth = pScene->nominalSize().width();
         qreal nominalHeight = pScene->nominalSize().height();
         qreal ratio = nominalWidth / nominalHeight;
@@ -174,13 +173,7 @@ void UBThumbnailAdaptor::persistScene(std::shared_ptr<UBDocumentProxy> proxy, st
         pScene->setRenderingContext(UBGraphicsScene::Screen);
         pScene->setRenderingQuality(UBItem::RenderingQualityNormal, UBItem::CacheAllowed);
 
-        const qint64 renderMs = thumbTimer.elapsed(); // TEMP-PAGETIMING
         thumb.scaled(width, height, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(fileName, "JPG");
-        // TEMP-PAGETIMING
-        qWarning() << "[PAGETIMING] thumbnailRender page" << pageIndex
-                   << "renderMs" << renderMs
-                   << "saveMs" << (thumbTimer.elapsed() - renderMs)
-                   << "totalMs" << thumbTimer.elapsed();
     }
 }
 
