@@ -318,17 +318,11 @@ int UBApplication::exec(const QString& pFileToImport)
 
     displayManager = new UBDisplayManager(staticMemoryCleaner);
 
-    if (UBSettings::settings()->appRunInWindow->get().toBool()) {
-        mainWindow = new UBMainWindow(0,
-                Qt::Window |
-                Qt::WindowCloseButtonHint |
-                Qt::WindowMinimizeButtonHint |
-                Qt::WindowMaximizeButtonHint |
-                Qt::WindowShadeButtonHint
-        ); // deleted by application destructor
-    } else {
-        mainWindow = new UBMainWindow(0, Qt::FramelessWindowHint); // deleted by application destructor
-    }
+    // The main window is always frameless: no title bar and no
+    // minimize/maximize/close buttons. Whether it is shown fullscreen or as an
+    // ordinary (frameless) window is controlled by the App/RunInWindow setting,
+    // see UBPlatformUtils::showFullScreen().
+    mainWindow = new UBMainWindow(0, Qt::Window | Qt::FramelessWindowHint); // deleted by application destructor
 
     mainWindow->setAttribute(Qt::WA_NativeWindow, true);
 

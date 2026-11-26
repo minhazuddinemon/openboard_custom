@@ -493,7 +493,10 @@ void UBPlatformUtils::showFullScreen(QWidget *pWidget)
 {
     if (UBSettings::settings()->appRunInWindow->get().toBool() &&
             pWidget == UBApplication::displayManager->widget(ScreenRole::Control)) {
-        pWidget->show();
+        // Windowed mode: fill the screen like a maximized normal window
+        // instead of entering compositor fullscreen. This keeps the panel
+        // and dock able to pop up on hover.
+        pWidget->showMaximized();
     } else {
         pWidget->showFullScreen();
     }
