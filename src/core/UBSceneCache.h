@@ -116,6 +116,10 @@ private:
         std::shared_ptr<UBSvgSubsetAdaptor::UBSvgReaderContext> mContext = nullptr;
         std::shared_ptr<UBGraphicsScene> mScene = nullptr;
         QTimer* mTimer = nullptr;
+        // TEMP-PAGETIMING
+        int mTimingPage = -1;
+        QElapsedTimer mTimingTimer;
+        int mTimingSteps = 0;
     };
 
 //    typedef QFuture<std::shared_ptr<UBGraphicsScene>> FutureScene;

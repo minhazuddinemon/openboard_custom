@@ -22,6 +22,8 @@
 
 #include "UBThumbnailScene.h"
 
+#include <QElapsedTimer>
+
 #include "adaptors/UBThumbnailAdaptor.h"
 #include "core/UBApplication.h"
 #include "core/UBSettings.h"
@@ -172,7 +174,9 @@ UBThumbnail* UBThumbnailScene::thumbnailAt(int index)
             // create the missing thumbnail
             auto thumbnailItem = new UBThumbnail;
 
+            QElapsedTimer thumbLoadTimer; thumbLoadTimer.start(); // TEMP-PAGETIMING
             thumbnailItem->setPixmap(UBThumbnailAdaptor::get(mDocument->proxy(), index));
+            qWarning() << "[PAGETIMING] thumbnailPixmapLoad page" << index << "ms" << thumbLoadTimer.elapsed(); // TEMP-PAGETIMING
             thumbnailItem->setSceneIndex(index);
 
             mThumbnailItems[index] = thumbnailItem;

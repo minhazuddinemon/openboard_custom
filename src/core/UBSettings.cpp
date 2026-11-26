@@ -1059,6 +1059,13 @@ bool UBSettings::isSeyesRuledBackground()
 
 void UBSettings::setDarkBackground(bool isDarkBackground)
 {
+    // Do not re-theme the whole application when the effective dark/light
+    // state did not change. setActiveDocumentScene() calls this on every page
+    // switch; emitting colorContextChanged unconditionally made every switch
+    // re-polish the complete widget tree (UBTheme::apply -> setStyleSheet).
+    if (isDarkBackground == this->isDarkBackground())
+        return;
+
     setValue("Board/DarkBackground", isDarkBackground);
     emit colorContextChanged();
 }
